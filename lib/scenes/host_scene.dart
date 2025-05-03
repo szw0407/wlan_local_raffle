@@ -1,5 +1,5 @@
-import 'dart:convert'; // Add import for utf8
-import 'dart:io'; // Add import for InternetAddress and RawDatagramSocket
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/message.dart';
@@ -21,10 +21,10 @@ class _HostPageState extends State<HostPage> {
   final TextEditingController _usernameController = TextEditingController();
   final List<Prize> _prizes = [];
   bool _started = false;
-  Multicast? _Multicast;
+  Multicast? _multicast;
   Room? _room;
-  String? _multicastAddress;
-  int? _port;
+  String _multicastAddress = '224.1.0.1'; // Default address
+  int _port = 10012; // Default port
   List<User> _participants = [];
   String? _lotteryResult;
   String? _roomCode;
@@ -34,7 +34,7 @@ class _HostPageState extends State<HostPage> {
   @override
   void dispose() {
     _usernameController.dispose();
-    _Multicast?.stopSendBoardcast(); // Use stopSendBoardcast
+    _multicast?.dispose(); // Use dispose for cleanup
     super.dispose();
   }
 
@@ -135,44 +135,80 @@ class _HostPageState extends State<HostPage> {
     });
   }
 
-  // 固定多播地址和端口，便于调试
-  void _allocateMulticastAddressAndPort() {
-    _multicastAddress = '224.0.0.1';
-    _port = 10012;
+  void _handleMessage(String data, String address) {
+    try {
+      final msg = Message.fromString(data);
+      print('Host received message: ${msg.type} from $address'); // Debug log
+
+      if (msg.type == MessageType.joinRequest) {
+        final user = User.fromJson(msg.data['user']);
+        // Prevent duplicates and adding self if host sends join somehow
+        if (_currentParticipants.any((u) => u.id == user.id) || user.id == _room?.host.id) {
+          return;
+        }
+        setState(() {
+          _currentParticipants.add(user);
+        });
+        // Optionally send updated room info immediately upon join
+        _broadcastRoomInfo();
+      }
+      // Handle other message types if needed
+    } catch (e) {
+      print('Error handling message in host: $e');
+    }
   }
 
-  void _handleJoinRequest(Message msg) {
-    final user = User.fromJson(msg.data['user']);
-    if (_participants.any((u) => u.id == user.id)) return;
-    setState(() {
-      _participants.add(user);
-    });
-    // 回复房间信息，便于抽奖者端显示房主和奖品
-    // TODO
+  // Renamed from _listenMulticast for clarity
+  Future<void> _startNetworkServices() async {
+    if (_multicast != null) return; // Already started
+
+    try {
+      _multicast = Multicast(
+        mDnsAddressIPv4: InternetAddress(_multicastAddress),
+        port: _port,
+      );
+      await _multicast!.startListening();
+      _multicast!.addListener(_handleMessage);
+
+      // Start periodic broadcast of room info
+      await _multicast!.startPeriodicBroadcast([
+        _buildRoomInfoMessage() // Initial room info
+      ], duration: const Duration(seconds: 3)); // Adjust interval as needed
+
+      print('Host network services started.');
+    } catch (e) {
+      print("Error starting host network services: $e");
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('启动网络服务失败: $e')));
+      setState(() {
+        _started = false; // Revert state
+        _multicast?.dispose();
+        _multicast = null;
+      });
+      throw e; // Rethrow to stop lottery start process
+    }
   }
 
-  void _listenMulticast() {
-    _participants = [_room!.host]; // 房主自己也参与
-    
-  }
-
-
-  void _broadcastRoomInfo() {
-    if (_room == null) return;
-    final room = Room(
-      id: _room!.id,
-      host: _room!.host,
-      prizes: List<Prize>.from(_prizes),
-      participants: List<User>.from(_currentParticipants),
-      multicastAddress: _room!.multicastAddress,
-      port: _room!.port,
-      isLotteryStarted: _started,
-      isLotteryFinished: _lotteryDone,
+  String _buildRoomInfoMessage() {
+    if (_room == null) return ''; // Should not happen if called correctly
+    // Update room participants before sending
+    _room = _room!.copyWith(participants: _currentParticipants, isLotteryFinished: _lotteryDone);
+    final message = Message(
+      type: MessageType.roomInfo,
+      data: _room!.toJson(),
     );
-    // TODO
+    return message.toString();
   }
 
-  void _startLottery() {
+  // Send current room info once
+  void _broadcastRoomInfo() {
+    if (_multicast == null || _room == null) return;
+    final messageString = _buildRoomInfoMessage();
+    if (messageString.isNotEmpty) {
+      _multicast!.sendOnce(messageString);
+    }
+  }
+
+  void _startLottery() async { // Make async
     if (_usernameController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入用户名')));
       return;
@@ -181,50 +217,43 @@ class _HostPageState extends State<HostPage> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请至少添加一个奖品')));
       return;
     }
+
     setState(() {
       _started = true;
       _lotteryDone = false;
+      _lotteryResult = null; // Reset result
     });
-    _allocateMulticastAddressAndPort();
-    _roomCode = RoomCodeUtil.encode(_multicastAddress!, _port!);
+
+    _roomCode = RoomCodeUtil.encode(_multicastAddress, _port);
     final hostUser = User(id: const Uuid().v4(), name: _usernameController.text.trim(), isHost: true);
     _room = Room.create(
       name: '抽奖房间',
       host: hostUser,
-      multicastAddress: _multicastAddress!,
-      port: _port!,
+      multicastAddress: _multicastAddress,
+      port: _port,
       prizes: List<Prize>.from(_prizes),
+      participants: [hostUser], // Start with host
     );
     _currentParticipants = [hostUser];
-    // Update Multicast instantiation
-    try {
-      _Multicast = Multicast(
-        mDnsAddressIPv4: InternetAddress(_multicastAddress!),
-        port: _port!,
-      );
-      // TODO: Start listening for messages if needed
-      // _Multicast?.addListener(_handleMessage);
-      // TODO: Start periodic broadcast if needed
-      // _Multicast?.startSendBoardcast([_buildRoomInfoMessage()]);
-    } catch (e) {
-       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('启动网络服务失败: $e')));
-       setState(() {
-         _started = false; // Revert state if network setup fails
-       });
-       return;
-    }
 
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('房间信息'),
-        content: Text('房间号: $_roomCode'),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('确定'))],
-      ),
-    );
+    try {
+      await _startNetworkServices(); // Start listening and broadcasting
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('房间信息'),
+          content: SelectableText('房间号: $_roomCode\n地址: $_multicastAddress:$_port'), // Show address too
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('确定'))],
+        ),
+      );
+    } catch (e) {
+      // Error already handled in _startNetworkServices
+      print("Failed to start lottery due to network error.");
+    }
   }
 
-  void _drawLottery() async { // Make async for socket operations
+  void _drawLottery() async { // Keep async
     if (_currentParticipants.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('没有参与者，无法开奖')));
       return;
@@ -250,65 +279,29 @@ class _HostPageState extends State<HostPage> {
       _lotteryDone = true;
     });
 
-    // Send lottery result using a temporary socket
-    final message = Message(
+    // Stop periodic room info broadcast
+    _multicast?.stopPeriodicBroadcast();
+
+    // Send lottery result message
+    final resultMessage = Message(
       type: MessageType.lotteryResult,
       data: {
         'result': result,
-        'roomCode': _roomCode,
-        'prizes': _prizes.map((p) => p.toJson()).toList(),
+        'roomCode': _roomCode, // Include room code for potential filtering on client
+        'prizes': _prizes.map((p) => p.toJson()).toList(), // Send final prize list
+        'winners': winners, // Send winner map
       },
     ).toString();
-    final List<int> data = utf8.encode(message);
-    try {
-      // Use the multicast address and port from the room
-      final InternetAddress multiAddress = InternetAddress(_room!.multicastAddress);
-      final int port = _room!.port;
 
-      RawDatagramSocket socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      socket.send(data, multiAddress, port); // Send to multicast group
-      // Also send to broadcast addresses (optional, but helps discovery)
-      final List<String> localAddresses = await _localAddress(); // Assuming _localAddress is accessible or reimplemented
-       for (final String addr in localAddresses) {
-         final tmp = addr.split('.');
-         tmp.removeLast();
-         final String addrPrfix = tmp.join('.');
-         final InternetAddress broadcastAddress = InternetAddress('$addrPrfix.255');
-         try {
-            socket.send(data, broadcastAddress, port);
-         } catch (e) {
-           print("Error sending broadcast to $broadcastAddress: $e");
-         }
-       }
-      socket.close();
-      print('Lottery result sent.');
-    } catch (e) {
-      print('Error sending lottery result: $e');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('发送开奖结果失败: $e')));
-    }
+    await _multicast?.sendOnce(resultMessage);
+    print('Lottery result sent.');
 
-    // 广播最终roomInfo，标记已开奖
-    _broadcastRoomInfo(); // This might also need adjustment to use a temporary socket
+    // Send final room info indicating lottery finished
+    _broadcastRoomInfo(); // This will now include isLotteryFinished = true
+    // Optionally send it a few times to increase delivery chance
+    await Future.delayed(Duration(milliseconds: 100));
+    _broadcastRoomInfo();
   }
-
-  // Helper function (copy or import if needed)
-  Future<List<String>> _localAddress() async {
-    List<String> address = [];
-    final List<NetworkInterface> interfaces = await NetworkInterface.list(
-      includeLoopback: false,
-      type: InternetAddressType.IPv4,
-    );
-    for (final NetworkInterface netInterface in interfaces) {
-      for (final InternetAddress netAddress in netInterface.addresses) {
-        // Basic IPv4 check (consider refining)
-        if (netAddress.type == InternetAddressType.IPv4) {
-           address.add(netAddress.address);
-        }
-      }
-    }
-    return address;
-  }
-
 
   @override
   Widget build(BuildContext context) {
@@ -353,7 +346,8 @@ class _HostPageState extends State<HostPage> {
             if (_started)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8.0),
-                child: Text('房间号: ${_roomCode ?? ''}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                // Use SelectableText for easy copying
+                child: SelectableText('房间号: ${_roomCode ?? ''}\n地址: $_multicastAddress:$_port', style: const TextStyle(fontWeight: FontWeight.bold)),
               ),
             if (!_started)
               Row(
@@ -371,16 +365,28 @@ class _HostPageState extends State<HostPage> {
               ),
             if (_started && !_lotteryDone)
               Column(
+                crossAxisAlignment: CrossAxisAlignment.start, // Align text left
                 children: [
                   const Center(child: Text('抽奖已开始，等待抽奖者加入...')),
                   const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: _drawLottery,
-                    child: const Text('开奖'),
+                  Center(
+                    child: ElevatedButton(
+                      onPressed: _drawLottery,
+                      child: const Text('开奖'),
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  Text('当前参与者：'),
-                  ..._currentParticipants.map((u) => Text(u.name)),
+                  const SizedBox(height: 16),
+                  Text('当前参与者 (${_currentParticipants.length}):'), // Show count
+                  // Display participants in a scrollable view if list gets long
+                  Container(
+                    constraints: BoxConstraints(maxHeight: 100), // Limit height
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: _currentParticipants.map((u) => Text(u.name)).toList(),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             if (_lotteryResult != null)
@@ -388,7 +394,7 @@ class _HostPageState extends State<HostPage> {
                 child: Column(
                   children: [
                     const Text('开奖结果', style: TextStyle(fontWeight: FontWeight.bold)),
-                    Text(_lotteryResult!, style: const TextStyle(fontSize: 18, color: Colors.green)),
+                    SelectableText(_lotteryResult!, style: const TextStyle(fontSize: 18, color: Colors.green)),
                   ],
                 ),
               ),

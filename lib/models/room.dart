@@ -37,6 +37,7 @@ class Room {
     required User host,
     required String multicastAddress,
     required int port,
+    required List<User> participants,
     List<Prize> prizes = const [],
   }) {
     final uuid = Uuid();
@@ -60,6 +61,7 @@ class Room {
         isLotteryStarted: json['isLotteryStarted'] ?? false,
         isLotteryFinished: json['isLotteryFinished'] ?? false,
       );
+
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -105,5 +107,18 @@ class Room {
   // 设置中奖结果
   void setWinners(Map<String, String> winnerMap) {
     isLotteryFinished = true;
+  }
+
+  Room? copyWith({required List<User> participants, required bool isLotteryFinished}) {
+    return Room(
+      id: id,
+      host: host,
+      prizes: prizes,
+      participants: participants,
+      multicastAddress: multicastAddress,
+      port: port,
+      isLotteryStarted: isLotteryStarted,
+      isLotteryFinished: isLotteryFinished,
+    );
   }
 }
