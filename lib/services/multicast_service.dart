@@ -51,8 +51,8 @@ class Multicast {
 
   // Constructor with defaults
   Multicast({InternetAddress? mDnsAddressIPv4, int? port})
-      : this.mDnsAddressIPv4 = mDnsAddressIPv4 ?? _defaultMdnsAddressIPv4,
-        this.port = port ?? _defaultPort {
+      : mDnsAddressIPv4 = mDnsAddressIPv4 ?? _defaultMdnsAddressIPv4,
+        port = port ?? _defaultPort {
      _errorReceivePort.listen((message) {
         print("Error from broadcast isolate: $message");
         // Optionally handle isolate errors, e.g., restart it
@@ -74,7 +74,7 @@ class Multicast {
         reusePort: Platform.isWindows ? false : true, // Reuse port might be needed on non-Windows
         ttl: 255,
       );
-      _socket!.joinMulticast(this.mDnsAddressIPv4);
+      _socket!.joinMulticast(mDnsAddressIPv4);
       _socket!.broadcastEnabled = false; // Not needed for multicast receive
       _socket!.readEventsEnabled = true;
       _socket!.listen((RawSocketEvent rawSocketEvent) {
@@ -155,8 +155,8 @@ class Multicast {
          _multicastBroadcastIsolate,
          _IsolateArgs(
            _errorReceivePort.sendPort, // Pass error port
-           this.port,
-           this.mDnsAddressIPv4,
+           port,
+           mDnsAddressIPv4,
            messages,
            duration,
          ),
@@ -185,7 +185,7 @@ class Multicast {
   /// Send a single message immediately via multicast
   Future<void> sendOnce(String message) async {
     List<int> dataList = utf8.encode(message);
-    RawDatagramSocket? tempSocket = null;
+    RawDatagramSocket? tempSocket;
     try {
       // Use a temporary socket for sending one-off messages
       tempSocket = await RawDatagramSocket.bind(
@@ -195,7 +195,7 @@ class Multicast {
          // reuseAddress: true, // Generally not needed for sending socket
       );
       // No need to join multicast group for sending
-      tempSocket.send(dataList, this.mDnsAddressIPv4, this.port);
+      tempSocket.send(dataList, mDnsAddressIPv4, port);
       print('Sent message to ${mDnsAddressIPv4.address}:$port');
       // Add a small delay to allow the packet to be sent before closing
       await Future.delayed(const Duration(milliseconds: 50));

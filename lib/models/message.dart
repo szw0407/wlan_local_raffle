@@ -1,7 +1,4 @@
 import 'dart:convert';
-import 'package:uuid/uuid.dart';
-import 'room.dart';
-import 'user.dart';
 
 // 消息类型枚举
 enum MessageType {

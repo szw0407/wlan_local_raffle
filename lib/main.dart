@@ -7,7 +7,7 @@ void main() {
 }
 
 class RaffleApp extends StatelessWidget {
-  const RaffleApp({Key? key}) : super(key: key);
+  const RaffleApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -26,7 +26,7 @@ class RaffleApp extends StatelessWidget {
 }
 
 class HomePage extends StatelessWidget {
-  const HomePage({Key? key}) : super(key: key);
+  const HomePage({super.key});
 
   @override
   Widget build(BuildContext context) {

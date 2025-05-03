@@ -9,7 +9,7 @@ import '../services/multicast_service.dart';
 import '../utils/room_code.dart';
 
 class JoinPage extends StatefulWidget {
-  const JoinPage({Key? key}) : super(key: key);
+  const JoinPage({super.key});
 
   @override
   State<JoinPage> createState() => _JoinPageState();

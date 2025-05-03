@@ -40,7 +40,7 @@ class Room {
     required List<User> participants,
     List<Prize> prizes = const [],
   }) {
-    final uuid = Uuid();
+    final uuid = const Uuid();
     return Room(
       id: uuid.v4(),
       host: host,

@@ -11,7 +11,7 @@ import 'dart:math';
 import '../utils/room_code.dart';
 
 class HostPage extends StatefulWidget {
-  const HostPage({Key? key}) : super(key: key);
+  const HostPage({super.key});
 
   @override
   State<HostPage> createState() => _HostPageState();
@@ -23,9 +23,9 @@ class _HostPageState extends State<HostPage> {
   bool _started = false;
   Multicast? _multicast;
   Room? _room;
-  String _multicastAddress = '224.1.0.1'; // Default address
-  int _port = 10012; // Default port
-  List<User> _participants = [];
+  final String _multicastAddress = '224.1.0.1'; // Default address
+  final int _port = 10012; // Default port
+  final List<User> _participants = [];
   String? _lotteryResult;
   String? _roomCode;
   List<User> _currentParticipants = [];
@@ -184,7 +184,7 @@ class _HostPageState extends State<HostPage> {
         _multicast?.dispose();
         _multicast = null;
       });
-      throw e; // Rethrow to stop lottery start process
+      rethrow; // Rethrow to stop lottery start process
     }
   }
 
@@ -299,7 +299,7 @@ class _HostPageState extends State<HostPage> {
     // Send final room info indicating lottery finished
     _broadcastRoomInfo(); // This will now include isLotteryFinished = true
     // Optionally send it a few times to increase delivery chance
-    await Future.delayed(Duration(milliseconds: 100));
+    await Future.delayed(const Duration(milliseconds: 100));
     _broadcastRoomInfo();
   }
 
@@ -379,7 +379,7 @@ class _HostPageState extends State<HostPage> {
                   Text('当前参与者 (${_currentParticipants.length}):'), // Show count
                   // Display participants in a scrollable view if list gets long
                   Container(
-                    constraints: BoxConstraints(maxHeight: 100), // Limit height
+                    constraints: const BoxConstraints(maxHeight: 100), // Limit height
                     child: SingleChildScrollView(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
