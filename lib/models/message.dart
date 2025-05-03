@@ -7,6 +7,7 @@ import 'user.dart';
 enum MessageType {
   roomInfo,      // 房间信息
   joinRequest,   // 加入房间请求
+  joinAck,       // 加入确认
   raffle,        // 抽奖请求
   drawStart,     // 开始抽奖
   drawResult,    // 抽奖结果
@@ -52,6 +53,19 @@ class Message {
       senderId: user.id,
       data: {
         'user': user.toJson(),
+      },
+    );
+  }
+  
+  // 创建加入确认消息
+  factory Message.joinAck(String roomId, User user) {
+    return Message(
+      type: MessageType.joinAck,
+      roomId: roomId,
+      senderId: user.id,
+      data: {
+        'user': user.toJson(),
+        'msg': '${user.name}加入成功',
       },
     );
   }

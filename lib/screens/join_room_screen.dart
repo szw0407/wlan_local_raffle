@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../services/network_service.dart';
 import '../services/raffle_service.dart';
 
 class JoinRoomScreen extends StatefulWidget {
@@ -10,96 +11,73 @@ class JoinRoomScreen extends StatefulWidget {
 }
 
 class _JoinRoomScreenState extends State<JoinRoomScreen> {
-  final _addressController = TextEditingController(text: '224.');
-  final _portController = TextEditingController();
+  final _roomCodeController = TextEditingController();
   final _raffleService = RaffleService();
   bool _isLoading = false;
   String? _errorMessage;
 
   @override
   void dispose() {
-    _addressController.dispose();
-    _portController.dispose();
+    _roomCodeController.dispose();
     super.dispose();
   }
 
   // 连接到房间
   Future<void> _joinRoom() async {
-    final address = _addressController.text.trim();
-    final portText = _portController.text.trim();
-
-    if (address.isEmpty || !address.startsWith('224.')) {
+    final code = _roomCodeController.text.trim();
+    if (code.isEmpty) {
       setState(() {
-        _errorMessage = '请输入有效的组播地址（以224.开头）';
+        _errorMessage = '请输入房间号';
       });
       return;
     }
-
+    String address;
     int port;
     try {
-      port = int.parse(portText);
-      if (port < 1024 || port > 65535) {
-        throw FormatException('端口必须在1024-65535范围内');
-      }
+      final decoded = NetworkService.decodeRoomCode(code);
+      address = decoded['ip'];
+      port = decoded['port'];
     } catch (e) {
       setState(() {
-        _errorMessage = '请输入有效的端口号';
+        _errorMessage = '房间号格式错误';
       });
       return;
     }
-
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
-
     try {
-      // 加入房间
       await _raffleService.joinRoom(address, port);
-      
-      // 显示连接中对话框
       if (mounted) {
         _showConnectingDialog();
       }
-      
-      // 等待接收房间信息（最多等待30秒）
       final roomStream = _raffleService.roomStream;
       final room = await roomStream.first.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () => throw Exception('连接超时，请检查地址和端口是否正确'),
+        const Duration(seconds:8),
+        onTimeout: () => throw Exception('连接超时，请检查房间号'),
       );
-      
-      // 关闭连接中对话框
       if (mounted) {
         Navigator.of(context).pop();
       }
-      
-      // 显示确认加入对话框
       if (mounted) {
         final confirmed = await _showJoinConfirmationDialog(room.name, room.host.name);
-        
         if (confirmed == true) {
-          // 导航到参与者房间界面
           Navigator.pushReplacementNamed(
             context, 
             '/participant_room',
           );
         } else {
-          // 用户取消加入，退出房间
           await _raffleService.leaveRoom();
         }
       }
     } catch (e) {
-      // 关闭连接中对话框
       if (mounted) {
         Navigator.of(context).pop();
       }
-      
       setState(() {
         _errorMessage = '加入房间失败: $e';
       });
-      
-      // 退出房间
       await _raffleService.leaveRoom();
     } finally {
       if (mounted) {
@@ -163,33 +141,19 @@ class _JoinRoomScreenState extends State<JoinRoomScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              '请输入房间地址和端口',
+              '请输入房间号',
               style: Theme.of(context).textTheme.titleLarge,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 20),
             TextField(
-              controller: _addressController,
+              controller: _roomCodeController,
               decoration: const InputDecoration(
-                labelText: '组播地址',
+                labelText: '房间号',
                 border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.wifi),
-                hintText: '224.x.x.x',
+                prefixIcon: Icon(Icons.key),
+                hintText: '如 77-9IX',
               ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _portController,
-              decoration: const InputDecoration(
-                labelText: '端口',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.router),
-                hintText: '10000-65535',
-              ),
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-              ],
             ),
             if (_errorMessage != null) ...[
               const SizedBox(height: 10),

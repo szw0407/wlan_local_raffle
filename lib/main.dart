@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:wlan_local_raffle/screens/join_room_screen.dart';
 import 'screens/host_room_screen.dart';
 import 'screens/create_room_screen.dart';
 import 'screens/participant_room_screen.dart';
@@ -26,6 +27,7 @@ class MyApp extends StatelessWidget {
         '/create_room': (context) => CreateRoomScreen(),
         '/host_room': (context) => HostRoomScreen(),
         '/participant_room': (context) => ParticipantRoomScreen(),
+        '/join_room': (context) => JoinRoomScreen()
       },
     );
   }

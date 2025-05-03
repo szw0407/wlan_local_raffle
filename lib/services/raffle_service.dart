@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:io';
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'network_service.dart';
@@ -63,6 +64,9 @@ class RaffleService {
   
   // 已收到的消息ID集合（防止重复处理）
   final Set<String> _processedMessageIds = {};
+  
+  // 定时广播房间信息的定时器
+  Timer? _broadcastTimer;
   
   // 初始化服务
   Future<void> _initializeService() async {
@@ -131,10 +135,21 @@ class RaffleService {
         prizes: prizes,
       );
       
+      // 生成房间号
+      final roomCode = NetworkService.encodeRoomCode(_currentRoom!.multicastAddress, _currentRoom!.port);
+      
       // 更新状态
       _status = RaffleServiceStatus.hosting;
       _statusController.add(_status);
       _roomController.add(_currentRoom!);
+      
+      // 启动定时广播（每2秒）
+      _broadcastTimer?.cancel();
+      _broadcastTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+        if (_status == RaffleServiceStatus.hosting && _currentRoom != null) {
+          broadcastRoomInfo();
+        }
+      });
       
       return _currentRoom!;
     } catch (e) {
@@ -153,10 +168,25 @@ class RaffleService {
       // 初始化网络服务（作为参与者）
       await _networkService.initClient(multicastAddress, port);
       
-      // 发送加入请求
-      // 这里我们先发送一个空的房间ID，等收到房间信息后再更新
+      // 获取本机IP
+      String? localIp;
+      int? localPort;
+      for (var interface in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+        for (var addr in interface.addresses) {
+          if (!addr.isLoopback && addr.type == InternetAddressType.IPv4) {
+            localIp = addr.address;
+            break;
+          }
+        }
+        if (localIp != null) break;
+      }
+      
+      // 获取UDP监听端口
+      localPort = port;
+      
+      // 发送加入请求，带上本机IP和端口
       await _networkService.sendMessage(
-        Message.joinRequest('pending', _currentUser!),
+        Message.joinRequest('pending', _currentUser!)..data['ip'] = localIp ?? '',
       );
       
       // 更新状态
@@ -297,6 +327,9 @@ class RaffleService {
       case MessageType.joinRequest:
         _handleJoinRequestMessage(message);
         break;
+      case MessageType.joinAck:
+        _handleJoinAckMessage(message);
+        break;
       case MessageType.raffle:
         _handleRaffleMessage(message);
         break;
@@ -306,6 +339,15 @@ class RaffleService {
       case MessageType.drawResult:
         _handleDrawResultMessage(message);
         break;
+    }
+  }
+
+  // 处理加入确认消息
+  void _handleJoinAckMessage(Message message) {
+    // 只有参与者处理自己的加入确认
+    if (_currentUser != null && message.senderId == _currentUser!.id) {
+      // 可以在这里触发UI提示，如通过errorStream或新建一个infoStream
+      _errorController.add(message.data['msg'] ?? '加入成功');
     }
   }
   
@@ -337,14 +379,20 @@ class RaffleService {
     
     final userData = message.data['user'];
     final user = User.fromJson(userData);
+    final targetIp = message.data['ip'] ?? '';
+    final targetPort = _currentRoom!.port; // 端口用房间端口
     
     // 将用户添加到参与者列表
     _currentRoom!.addParticipant(user);
     
-    // 广播更新后的房间信息
-    _networkService.sendMessage(
-      Message.roomInfo(_currentRoom!),
-    );
+    // 单播加入确认消息给该用户
+    if (targetIp.isNotEmpty) {
+      _networkService.sendMessage(
+        Message.joinAck(_currentRoom!.id, user),
+        targetAddress: targetIp,
+        targetPort: targetPort,
+      );
+    }
     
     // 更新流
     _roomController.add(_currentRoom!);
@@ -412,6 +460,10 @@ class RaffleService {
   
   // 退出房间/关闭房间
   Future<void> leaveRoom() async {
+    // 关闭定时广播
+    _broadcastTimer?.cancel();
+    _broadcastTimer = null;
+    
     // 关闭网络服务
     await _networkService.close();
     
@@ -428,6 +480,8 @@ class RaffleService {
   
   // 清理资源
   Future<void> dispose() async {
+    _broadcastTimer?.cancel();
+    _broadcastTimer = null;
     await _messageSubscription?.cancel();
     await _networkService.close();
     await _statusController.close();

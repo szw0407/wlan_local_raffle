@@ -10,8 +10,9 @@ class NetworkService {
   // 默认的组播地址范围(224.0.0.0 ~ 239.255.255.255)，这里我们使用224.x.x.x
   static const String _baseMulticastAddress = '224';
   // 端口范围（避免使用系统保留端口）
-  static const int _minPort = 10000;
-  static const int _maxPort = 65535;
+  static const int _minPort = 12345;
+  static const int _maxPort = 12445;
+  static const String _fixedMulticastPrefix = '224.1.0.';
   
   UDP? _udpSender;
   UDP? _udpReceiver;
@@ -34,10 +35,8 @@ class NetworkService {
   // 生成一个随机的组播地址
   String _generateMulticastAddress() {
     final random = Random();
-    final part2 = random.nextInt(256);
-    final part3 = random.nextInt(256);
     final part4 = random.nextInt(256);
-    return '$_baseMulticastAddress.$part2.$part3.$part4';
+    return '$_fixedMulticastPrefix$part4';
   }
   
   // 生成一个随机端口
@@ -110,21 +109,31 @@ class NetworkService {
   }
   
   // 发送消息
-  Future<void> sendMessage(Message message) async {
-    if (_multicastAddress == null || _port == null || _udpSender == null) {
+  Future<void> sendMessage(Message message, {String? targetAddress, int? targetPort}) async {
+    if (_udpSender == null) {
       throw Exception('网络服务未初始化');
     }
-    
     try {
       final data = message.serialize();
       final dataBytes = Uint8List.fromList(data.codeUnits);
-      
-      final endpoint = Endpoint.multicast(
-        InternetAddress(_multicastAddress!),
-        port: Port(_port!),
-      );
-      
-      await _udpSender!.send(dataBytes, endpoint);
+      if (targetAddress != null && targetPort != null) {
+        // 单播到指定IP和端口
+        final endpoint = Endpoint.unicast(
+          InternetAddress(targetAddress),
+          port: Port(targetPort),
+        );
+        await _udpSender!.send(dataBytes, endpoint);
+      } else {
+        // 组播
+        if (_multicastAddress == null || _port == null) {
+          throw Exception('组播地址未初始化');
+        }
+        final endpoint = Endpoint.multicast(
+          InternetAddress(_multicastAddress!),
+          port: Port(_port!),
+        );
+        await _udpSender!.send(dataBytes, endpoint);
+      }
     } catch (e) {
       print('发送消息失败: $e');
       throw e;
@@ -156,5 +165,22 @@ class NetworkService {
     _port = null;
     
     print('网络服务已关闭');
+  }
+  
+  // 新增：根据房间号解析地址和端口
+  static Map<String, dynamic> decodeRoomCode(String code) {
+    // 支持格式：77-9IX（77为ip最后一段，9IX为base36端口）
+    final parts = code.split('-');
+    if (parts.length != 2) throw Exception('房间号格式错误');
+    final ip = '224.1.0.${int.parse(parts[0])}';
+    final port = int.parse(parts[1], radix: 36);
+    return {'ip': ip, 'port': port};
+  }
+  
+  // 新增：生成房间号
+  static String encodeRoomCode(String ip, int port) {
+    final last = ip.split('.').last;
+    final portCode = port.toRadixString(36).toUpperCase();
+    return '$last-$portCode';
   }
 }

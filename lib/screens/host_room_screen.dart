@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/room.dart';
 import '../models/user.dart';
+import '../services/network_service.dart';
 import '../services/raffle_service.dart';
 
 class HostRoomScreen extends StatefulWidget {
@@ -62,6 +63,14 @@ class _HostRoomScreenState extends State<HostRoomScreen> {
             Text('房主: ${_room.host.name}'),
             Text('多播地址: ${_room.multicastAddress}'),
             Text('端口: ${_room.port}'),
+            const SizedBox(height: 16),
+            // 大字体展示房间号
+            Center(
+              child: Text(
+                '房间号: ' + NetworkService.encodeRoomCode(_room.multicastAddress, _room.port),
+                style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.blue),
+              ),
+            ),
             const SizedBox(height: 16),
             Text('奖品列表:', style: Theme.of(context).textTheme.titleMedium),
             ..._room.prizes.map((p) => Text('${p.name} × ${p.quantity}')).toList(),
