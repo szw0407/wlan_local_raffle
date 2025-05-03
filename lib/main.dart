@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'scenes/host_scene.dart';
+import 'scenes/join_scene.dart';
 
 void main() {
   runApp(const RaffleApp());
@@ -50,25 +52,4 @@ class HomePage extends StatelessWidget {
   }
 }
 
-// 预留房主页面和抽奖者页面
-class HostPage extends StatelessWidget {
-  const HostPage({Key? key}) : super(key: key);
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('房主设置')),
-      body: const Center(child: Text('房主页面开发中...')),
-    );
-  }
-}
 
-class JoinPage extends StatelessWidget {
-  const JoinPage({Key? key}) : super(key: key);
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('加入抽奖房间')),
-      body: const Center(child: Text('抽奖者页面开发中...')),
-    );
-  }
-}
