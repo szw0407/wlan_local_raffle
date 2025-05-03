@@ -26,6 +26,8 @@ class _HostPageState extends State<HostPage> {
   List<User> _participants = [];
   String? _lotteryResult;
   String? _roomCode;
+  List<User> _currentParticipants = [];
+  bool _lotteryDone = false;
 
   @override
   void dispose() {
@@ -131,16 +133,10 @@ class _HostPageState extends State<HostPage> {
     });
   }
 
-  // 随机分配一个可用的多播地址和端口
+  // 固定多播地址和端口，便于调试
   void _allocateMulticastAddressAndPort() {
-    final rand = Random();
-    // 224.0.1.0 ~ 239.255.255.255
-    final a = 224 + rand.nextInt(16); // 224~239
-    final b = rand.nextInt(256);
-    final c = rand.nextInt(256);
-    final d = rand.nextInt(254) + 1; // 避免0
-    _multicastAddress = '$a.$b.$c.$d';
-    _port = 40000 + rand.nextInt(10000); // 40000~49999
+    _multicastAddress = '224.0.0.1';
+    _port = 10012;
   }
 
   void _handleJoinRequest(Message msg) {
@@ -162,6 +158,38 @@ class _HostPageState extends State<HostPage> {
     });
   }
 
+  void _startMulticastListener() {
+    _multicastService?.onMessage.listen((msg) {
+      if (_lotteryDone) return;
+      if (msg.type == MessageType.joinRequest) {
+        final user = User.fromJson(msg.data['user']);
+        // 只允许未开奖时加入
+        if (!_currentParticipants.any((u) => u.id == user.id)) {
+          setState(() {
+            _currentParticipants.add(user);
+          });
+          // 广播最新roomInfo，带当前参与者
+          _broadcastRoomInfo();
+        }
+      }
+    });
+  }
+
+  void _broadcastRoomInfo() {
+    if (_room == null) return;
+    final room = Room(
+      id: _room!.id,
+      host: _room!.host,
+      prizes: List<Prize>.from(_prizes),
+      participants: List<User>.from(_currentParticipants),
+      multicastAddress: _room!.multicastAddress,
+      port: _room!.port,
+      isLotteryStarted: _started,
+      isLotteryFinished: _lotteryDone,
+    );
+    _multicastService?.send(Message(type: MessageType.roomInfo, data: room.toJson()));
+  }
+
   void _startLottery() {
     if (_usernameController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入用户名')));
@@ -173,6 +201,7 @@ class _HostPageState extends State<HostPage> {
     }
     setState(() {
       _started = true;
+      _lotteryDone = false;
     });
     _allocateMulticastAddressAndPort();
     _roomCode = RoomCodeUtil.encode(_multicastAddress!, _port!);
@@ -184,17 +213,12 @@ class _HostPageState extends State<HostPage> {
       port: _port!,
       prizes: List<Prize>.from(_prizes),
     );
+    _currentParticipants = [hostUser];
     _multicastService = MulticastService(multicastAddress: _multicastAddress!, port: _port!);
     _multicastService!.start().then((_) {
-      _listenMulticast();
-      _multicastService!.send(
-        Message(
-          type: MessageType.roomInfo,
-          data: _room!.toJson(),
-        ),
-      );
+      _startMulticastListener();
+      _broadcastRoomInfo();
     });
-    // 弹窗显示房间信息
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -206,32 +230,33 @@ class _HostPageState extends State<HostPage> {
   }
 
   void _drawLottery() {
-    if (_participants.isEmpty) {
+    if (_currentParticipants.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('没有参与者，无法开奖')));
       return;
     }
-    // 简单的随机分配奖品给参与者
     final rand = Random();
-    final winners = <String, String>{}; // userName: prizeName
     final prizePool = <Prize>[];
     for (final p in _prizes) {
       for (int i = 0; i < p.count; i++) {
         prizePool.add(Prize(id: p.id, name: p.name, count: 1));
       }
     }
-    final users = List<User>.from(_participants);
+    final users = List<User>.from(_currentParticipants);
     users.shuffle(rand);
     prizePool.shuffle(rand);
     int n = min(users.length, prizePool.length);
+    final winners = <String, String>{};
     for (int i = 0; i < n; i++) {
       winners[users[i].name] = prizePool[i].name;
     }
     String result = winners.entries.map((e) => '${e.key}：${e.value}').join('\n');
     setState(() {
       _lotteryResult = result;
+      _lotteryDone = true;
     });
-    // 广播开奖结果
     _multicastService?.send(Message(type: MessageType.lotteryResult, data: {'result': result}));
+    // 广播最终roomInfo，标记已开奖
+    _broadcastRoomInfo();
   }
 
   @override
@@ -293,7 +318,7 @@ class _HostPageState extends State<HostPage> {
                   ),
                 ],
               ),
-            if (_started && _lotteryResult == null)
+            if (_started && !_lotteryDone)
               Column(
                 children: [
                   const Center(child: Text('抽奖已开始，等待抽奖者加入...')),
@@ -304,7 +329,7 @@ class _HostPageState extends State<HostPage> {
                   ),
                   const SizedBox(height: 8),
                   Text('当前参与者：'),
-                  ..._participants.map((u) => Text(u.name)),
+                  ..._currentParticipants.map((u) => Text(u.name)),
                 ],
               ),
             if (_lotteryResult != null)

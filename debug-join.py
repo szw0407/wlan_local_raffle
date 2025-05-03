@@ -1,10 +1,11 @@
 import socket
 import struct
 import sys
-import base64
+import random
+import string
+import json
 
 def decode_room_code(code):
-    # Flutter端是Base36编码
     code_num = int(code, 36)
     raw = code_num >> 8
     port_high = code_num & 0xFF
@@ -16,6 +17,17 @@ def decode_room_code(code):
     address = f'224.{b}.{c}.{d}'
     return address, port
 
+def random_username():
+    return 'PY_' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+def random_id():
+    # 生成一个简单的UUID格式
+    return ''.join(random.choices('abcdef' + string.digits, k=8)) + '-' + \
+           ''.join(random.choices('abcdef' + string.digits, k=4)) + '-' + \
+           ''.join(random.choices('abcdef' + string.digits, k=4)) + '-' + \
+           ''.join(random.choices('abcdef' + string.digits, k=4)) + '-' + \
+           ''.join(random.choices('abcdef' + string.digits, k=12))
+
 def main():
     # code = input("请输入房间号: ").strip().upper()
     # address, port = decode_room_code(code)
@@ -23,7 +35,6 @@ def main():
     port = 10012
     print(f"解码结果: 多播地址={address}, 端口={port}")
 
-    # 创建UDP多播socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -35,7 +46,23 @@ def main():
     mreq = struct.pack('4sl', socket.inet_aton(address), socket.INADDR_ANY)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
-    print("开始监听消息...")
+    # 构造joinRequest消息
+    user = {
+        'id': random_id(),
+        'name': random_username(),
+        'isHost': False
+    }
+    msg = {
+        'type': 'joinRequest',
+        'data': {
+            'user': user
+        }
+    }
+    data = json.dumps(msg).encode('utf-8')
+    sock.sendto(data, (address, port))
+    print(f"已发送joinRequest: {user}")
+
+    print("监听房间消息（Ctrl+C退出）...")
     while True:
         data, addr = sock.recvfrom(4096)
         try:
