@@ -28,4 +28,13 @@ class Message {
         'type': type.toString().split('.').last,
         'data': data,
       };
+
+  static fromString(String data) {
+    try {
+      final Map<String, dynamic> json = jsonDecode(data);
+      return Message.fromJson(json);
+    } catch (e) {
+      return Message(type: MessageType.error, data: {'error': 'Invalid message format'});
+    }
+  }
 }

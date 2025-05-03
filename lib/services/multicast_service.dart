@@ -124,6 +124,7 @@ class Multicast {
   }
 
   Future<void> startSendBoardcast(
+    // used to send messages
     List<String> messages, {
     Duration duration = const Duration(seconds: 1),
   }) async {

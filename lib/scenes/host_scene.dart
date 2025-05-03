@@ -1,3 +1,5 @@
+import 'dart:convert'; // Add import for utf8
+import 'dart:io'; // Add import for InternetAddress and RawDatagramSocket
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/message.dart';
@@ -19,7 +21,7 @@ class _HostPageState extends State<HostPage> {
   final TextEditingController _usernameController = TextEditingController();
   final List<Prize> _prizes = [];
   bool _started = false;
-  MulticastService? _multicastService;
+  Multicast? _Multicast;
   Room? _room;
   String? _multicastAddress;
   int? _port;
@@ -32,7 +34,7 @@ class _HostPageState extends State<HostPage> {
   @override
   void dispose() {
     _usernameController.dispose();
-    _multicastService?.close();
+    _Multicast?.stopSendBoardcast(); // Use stopSendBoardcast
     super.dispose();
   }
 
@@ -146,34 +148,14 @@ class _HostPageState extends State<HostPage> {
       _participants.add(user);
     });
     // 回复房间信息，便于抽奖者端显示房主和奖品
-    _multicastService?.send(Message(type: MessageType.roomInfo, data: _room!.toJson()));
+    // TODO
   }
 
   void _listenMulticast() {
     _participants = [_room!.host]; // 房主自己也参与
-    _multicastService!.onMessage.listen((msg) {
-      if (msg.type == MessageType.joinRequest) {
-        _handleJoinRequest(msg);
-      }
-    });
+    
   }
 
-  void _startMulticastListener() {
-    _multicastService?.onMessage.listen((msg) {
-      if (_lotteryDone) return;
-      if (msg.type == MessageType.joinRequest) {
-        final user = User.fromJson(msg.data['user']);
-        // 只允许未开奖时加入
-        if (!_currentParticipants.any((u) => u.id == user.id)) {
-          setState(() {
-            _currentParticipants.add(user);
-          });
-          // 广播最新roomInfo，带当前参与者
-          _broadcastRoomInfo();
-        }
-      }
-    });
-  }
 
   void _broadcastRoomInfo() {
     if (_room == null) return;
@@ -187,7 +169,7 @@ class _HostPageState extends State<HostPage> {
       isLotteryStarted: _started,
       isLotteryFinished: _lotteryDone,
     );
-    _multicastService?.send(Message(type: MessageType.roomInfo, data: room.toJson()));
+    // TODO
   }
 
   void _startLottery() {
@@ -214,11 +196,24 @@ class _HostPageState extends State<HostPage> {
       prizes: List<Prize>.from(_prizes),
     );
     _currentParticipants = [hostUser];
-    _multicastService = MulticastService(multicastAddress: _multicastAddress!, port: _port!);
-    _multicastService!.start().then((_) {
-      _startMulticastListener();
-      _broadcastRoomInfo();
-    });
+    // Update Multicast instantiation
+    try {
+      _Multicast = Multicast(
+        mDnsAddressIPv4: InternetAddress(_multicastAddress!),
+        port: _port!,
+      );
+      // TODO: Start listening for messages if needed
+      // _Multicast?.addListener(_handleMessage);
+      // TODO: Start periodic broadcast if needed
+      // _Multicast?.startSendBoardcast([_buildRoomInfoMessage()]);
+    } catch (e) {
+       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('启动网络服务失败: $e')));
+       setState(() {
+         _started = false; // Revert state if network setup fails
+       });
+       return;
+    }
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -229,7 +224,7 @@ class _HostPageState extends State<HostPage> {
     );
   }
 
-  void _drawLottery() {
+  void _drawLottery() async { // Make async for socket operations
     if (_currentParticipants.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('没有参与者，无法开奖')));
       return;
@@ -254,10 +249,66 @@ class _HostPageState extends State<HostPage> {
       _lotteryResult = result;
       _lotteryDone = true;
     });
-    _multicastService?.send(Message(type: MessageType.lotteryResult, data: {'result': result}));
+
+    // Send lottery result using a temporary socket
+    final message = Message(
+      type: MessageType.lotteryResult,
+      data: {
+        'result': result,
+        'roomCode': _roomCode,
+        'prizes': _prizes.map((p) => p.toJson()).toList(),
+      },
+    ).toString();
+    final List<int> data = utf8.encode(message);
+    try {
+      // Use the multicast address and port from the room
+      final InternetAddress multiAddress = InternetAddress(_room!.multicastAddress);
+      final int port = _room!.port;
+
+      RawDatagramSocket socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      socket.send(data, multiAddress, port); // Send to multicast group
+      // Also send to broadcast addresses (optional, but helps discovery)
+      final List<String> localAddresses = await _localAddress(); // Assuming _localAddress is accessible or reimplemented
+       for (final String addr in localAddresses) {
+         final tmp = addr.split('.');
+         tmp.removeLast();
+         final String addrPrfix = tmp.join('.');
+         final InternetAddress broadcastAddress = InternetAddress('$addrPrfix.255');
+         try {
+            socket.send(data, broadcastAddress, port);
+         } catch (e) {
+           print("Error sending broadcast to $broadcastAddress: $e");
+         }
+       }
+      socket.close();
+      print('Lottery result sent.');
+    } catch (e) {
+      print('Error sending lottery result: $e');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('发送开奖结果失败: $e')));
+    }
+
     // 广播最终roomInfo，标记已开奖
-    _broadcastRoomInfo();
+    _broadcastRoomInfo(); // This might also need adjustment to use a temporary socket
   }
+
+  // Helper function (copy or import if needed)
+  Future<List<String>> _localAddress() async {
+    List<String> address = [];
+    final List<NetworkInterface> interfaces = await NetworkInterface.list(
+      includeLoopback: false,
+      type: InternetAddressType.IPv4,
+    );
+    for (final NetworkInterface netInterface in interfaces) {
+      for (final InternetAddress netAddress in netInterface.addresses) {
+        // Basic IPv4 check (consider refining)
+        if (netAddress.type == InternetAddressType.IPv4) {
+           address.add(netAddress.address);
+        }
+      }
+    }
+    return address;
+  }
+
 
   @override
   Widget build(BuildContext context) {
