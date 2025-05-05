@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'scenes/host_scene.dart';
-import 'scenes/join_scene.dart';
+import 'host_scene.dart';
+import 'join_scene.dart';
 
 void main() {
   runApp(const RaffleApp());
