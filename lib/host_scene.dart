@@ -7,7 +7,7 @@ import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class HostPage extends StatefulWidget {
-  const HostPage({Key? key}) : super(key: key);
+  const HostPage({super.key});
 
   @override
   State<HostPage> createState() => _HostPageState();

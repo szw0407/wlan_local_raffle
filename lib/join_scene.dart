@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'services/udp_service.dart';
 
 class JoinPage extends StatefulWidget {
-  const JoinPage({Key? key}) : super(key: key);
+  const JoinPage({super.key});
 
   @override
   State<JoinPage> createState() => _JoinPageState();
@@ -160,7 +160,7 @@ class _JoinPageState extends State<JoinPage> {
     });
     
     // 发送参与者广播
-    _udpService!.send(Uint8List.fromList('${_uuid}|$name'.codeUnits));
+    _udpService!.send(Uint8List.fromList('$_uuid|$name'.codeUnits));
     
     // 3秒超时
     _timeoutTimer = Timer(const Duration(seconds: 3), () {
@@ -175,7 +175,7 @@ class _JoinPageState extends State<JoinPage> {
 
   void _confirmJoin() {
     if (_udpService != null && _uuid != null) {
-      _udpService!.send(Uint8List.fromList('${_uuid}|confirm'.codeUnits));
+      _udpService!.send(Uint8List.fromList('$_uuid|confirm'.codeUnits));
       setState(() {
         _confirmed = true;
       });

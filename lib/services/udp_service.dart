@@ -5,7 +5,7 @@ import 'dart:typed_data';
 /// UDP 广播服务，支持多播地址的发送与监听
 class UdpService {
   RawDatagramSocket? _socket;
-  StreamController<Datagram> _controller = StreamController.broadcast();
+  final StreamController<Datagram> _controller = StreamController.broadcast();
   InternetAddress? _multicastAddress;
   int? _port;
 
