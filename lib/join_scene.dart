@@ -187,8 +187,7 @@ class _JoinPageState extends State<JoinPage> {
       _connectionState = ConnectionState.done;
     });
   }
-  
-  // 处理抽奖结果
+    // 处理抽奖结果
   void _handleRaffleResults(Map<String, dynamic> message) {
     final result = RaffleResult.fromJson(message['result']);
     final myPrizeId = result.userPrizePairs[_userUuid];
@@ -296,10 +295,9 @@ class _JoinPageState extends State<JoinPage> {
               Expanded(
                 child: ListView.builder(
                   itemCount: _prizes.length,
-                  itemBuilder: (context, index) {
-                    final prize = _prizes[index];
+                  itemBuilder: (context, index) {                    final prize = _prizes[index];
                     return ListTile(
-                      title: Text(prize.name),
+                      title: Text('${prize.name} (${prize.quantity}个)'),
                       subtitle: prize.description.isNotEmpty ? Text(prize.description) : null,
                     );
                   },

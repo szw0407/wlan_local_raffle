@@ -319,11 +319,13 @@ class _HostPageState extends State<HostPage> {
                   itemBuilder: (context, index) {
                     final user = _users[index];
                     String? prizeInfo;
-                    
-                    if (_raffleResult != null) {
+                      if (_raffleResult != null) {
                       final prizeId = _raffleResult!.userPrizePairs[user.uuid];
-                      final prizeName = RaffleService.getPrizeName(_prizes, prizeId);
-                      prizeInfo = prizeName != null ? '中奖: $prizeName' : '未中奖';
+                      final prize = _prizes.firstWhere(
+                        (p) => p.id == prizeId, 
+                        orElse: () => Prize(id: '', name: '')
+                      );
+                      prizeInfo = prize.name.isNotEmpty ? '中奖: ${prize.name}' : '未中奖';
                     }
                     
                     return ListTile(
