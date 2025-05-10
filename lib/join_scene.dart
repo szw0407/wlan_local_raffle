@@ -1,9 +1,14 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:convert'; // 添加JSON支持
+
 import 'package:flutter/material.dart';
-import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+
+import 'models/prize.dart';
+import 'models/raffle_result.dart';
+import 'models/user.dart';
+import 'services/message_service.dart';
 import 'services/udp_service.dart';
 
 class JoinPage extends StatefulWidget {
@@ -14,317 +19,376 @@ class JoinPage extends StatefulWidget {
 }
 
 class _JoinPageState extends State<JoinPage> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _portController = TextEditingController();
-  UdpService? _udpService;
-  String? _uuid;
-  String? _roomInfo;
-  String? _prizesInfo;
-  String? _myPrize;
-  bool _isWinner = false;
-  bool _connected = false;
-  bool _confirmed = false;
-  bool _connecting = false;
-  Timer? _timeoutTimer;
-  StreamSubscription? _sub;
+  final UdpService _udpService = UdpService();
+  final String _multicastAddress = "224.15.0.15";
+  
+  final TextEditingController _portController = TextEditingController(text: '8000');
+  
+  String _userName = '';
+  String _userUuid = '';
+  String? _hostName;
+  List<Prize> _prizes = [];
+  bool _isConnected = false;
+  bool _isConfirmed = false;
+  String? _myPrizeResult;
 
-  // 获奖者列表
-  final List<Map<String, dynamic>> _winnersList = [];
-
-  Future<void> _initUuid() async {
-    final prefs = await SharedPreferences.getInstance();
-    String? uuid = prefs.getString('user_uuid');
-    if (uuid == null) {
-      uuid = const Uuid().v4();
-      await prefs.setString('user_uuid', uuid);
-    }
-    _uuid = uuid;
-  }
-
+  late User _user;
+  Timer? _joinTimer;
+  
+  // 连接状态
+  ConnectionState _connectionState = ConnectionState.none;
+  String? _errorMessage;
+  
   @override
   void initState() {
     super.initState();
-    _initUuid();
+    _loadUserInfo();
   }
-
+  
   @override
   void dispose() {
-    _udpService?.close();
-    _nameController.dispose();
+    _stopClient();
     _portController.dispose();
-    _timeoutTimer?.cancel();
-    _sub?.cancel();
     super.dispose();
   }
-
-  Future<void> _connectRoom() async {
-    final name = _nameController.text.trim();
-    final portStr = _portController.text.trim();
-    if (name.isEmpty || portStr.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请输入用户名和端口号')));
+  
+  // 加载用户信息
+  Future<void> _loadUserInfo() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _userName = prefs.getString('user_name') ?? '未命名参与者';
+      _userUuid = prefs.getString('user_uuid') ?? const Uuid().v4();
+      _user = User(uuid: _userUuid, name: _userName);
+    });
+  }
+  
+  // 启动客户端
+  Future<void> _startClient() async {
+    if (_portController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请输入端口号')),
+      );
       return;
     }
     
-    final port = int.tryParse(portStr);
-    if (port == null || port < 20000 || port > 29999) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('端口号需在20000-29999之间')));
+    final port = int.tryParse(_portController.text.trim());
+    if (port == null || port < 1 || port > 65535) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('端口号无效，请输入1-65535之间的数字')),
+      );
       return;
     }
     
     setState(() {
-      _connecting = true;
-      _roomInfo = null;
-      _prizesInfo = null;
-      _confirmed = false;
-      _connected = false;
-      _winnersList.clear();
-      _myPrize = null;
-      _isWinner = false;
+      _connectionState = ConnectionState.waiting;
+      _errorMessage = null;
     });
     
-    // 确保UUID已初始化（只在必要时调用）
-    if (_uuid == null) {
-      await _initUuid();
-    }
-    
-    _udpService = UdpService();
-    
-    await _udpService!.bind(multicastAddress: '224.1.0.1', port: port);
-    
-    // 监听房主回复
-    _sub = _udpService!.onData.listen((datagram) {
-      final data = String.fromCharCodes(datagram.data);
+    try {
+      // 绑定UDP服务
+      await _udpService.bind(
+        multicastAddress: _multicastAddress,
+        port: port,
+      );
       
-      if (data.startsWith('room:')) {
-        _timeoutTimer?.cancel();
-        final parts = data.split('|');
-        final room = parts.firstWhere((e) => e.startsWith('room:'), orElse: () => '');
-        final prizes = parts.firstWhere((e) => e.startsWith('prizes:'), orElse: () => '');
-        setState(() {
-          _roomInfo = room.replaceFirst('room:', '');
-          _prizesInfo = prizes.replaceFirst('prizes:', '');
-          _connected = true;
-          _connecting = false;
-        });
-      } else if (data.startsWith('prize|')) {
-        // 使用新的JSON格式解析获奖信息
-        try {
-          final jsonStr = data.substring(6); // "prize|"之后的内容
-          final winnerData = jsonDecode(jsonStr) as Map<String, dynamic>;
-          
-          final winnerUuid = winnerData['uuid'] as String;
-          final winnerName = winnerData['name'] as String;
-          final prize = winnerData['prize'] as String;
-          
-          // 添加到获奖者列表
-          setState(() {
-            _winnersList.add({
-              'uuid': winnerUuid,
-              'name': winnerName,
-              'prize': prize
-            });
-            
-            // 检查自己是否中奖
-            if (winnerUuid == _uuid) {
-              _isWinner = true;
-              _myPrize = prize;
-            }
-          });
-        } catch (e) {
-          print('获奖信息解析错误: $e');
+      // 监听消息
+      _udpService.onData.listen(_handleIncomingMessage);
+      
+      // 开始重复发送加入请求，直到收到回应
+      _joinTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+        if (!_isConnected) {
+          _sendJoinRequest();
+        } else {
+          timer.cancel();
         }
-      } else if (data.startsWith('winner:')) {
-        // 为向后兼容保留的旧格式处理代码
-        final winnerData = data.replaceFirst('winner:', '').split('|');
-        if (winnerData.length == 3) {
-          final winnerUuid = winnerData[0];
-          final winnerName = winnerData[1];
-          final prize = winnerData[2];
-          
-          // 添加到获奖者列表
-          setState(() {
-            _winnersList.add({
-              'uuid': winnerUuid,
-              'name': winnerName,
-              'prize': prize
-            });
-            
-            // 检查自己是否中奖
-            if (winnerUuid == _uuid) {
-              _isWinner = true;
-              _myPrize = prize;
-            }
-          });
-        }
-      }
-    });
-    
-    // 发送参与者广播
-    _udpService!.send(Uint8List.fromList('$_uuid|$name'.codeUnits));
-    
-    // 3秒超时
-    _timeoutTimer = Timer(const Duration(seconds: 3), () {
-      if (!_connected) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('连接超时，未收到房主回复')));
-        setState(() {
-          _connecting = false;
-        });
-      }
-    });
-  }
-
-  void _confirmJoin() {
-    if (_udpService != null && _uuid != null) {
-      _udpService!.send(Uint8List.fromList('$_uuid|confirm'.codeUnits));
+      });
+      
+      // 立即发送第一次请求
+      _sendJoinRequest();
+      
+    } catch (e) {
       setState(() {
-        _confirmed = true;
+        _connectionState = ConnectionState.none;
+        _errorMessage = '连接失败: $e';
       });
     }
+  }
+  
+  // 停止客户端
+  void _stopClient() {
+    _joinTimer?.cancel();
+    _udpService.close();
+    setState(() {
+      _isConnected = false;
+      _isConfirmed = false;
+      _connectionState = ConnectionState.none;
+      _hostName = null;
+      _prizes = [];
+      _myPrizeResult = null;
+    });
+  }
+  
+  // 发送加入请求
+  void _sendJoinRequest() {
+    final message = MessageService.buildUserJoinMessage(_user);
+    _udpService.send(message);
+  }
+  
+  // 发送确认加入
+  void _sendConfirmation() {
+    _user.confirmed = true;
+    final message = MessageService.buildUserConfirmMessage(_user);
+    _udpService.send(message);
+    
+    setState(() {
+      _isConfirmed = true;
+    });
+  }
+  
+  // 处理接收到的消息
+  void _handleIncomingMessage(dynamic datagram) {
+    try {
+      final data = datagram.data as Uint8List;
+      final message = MessageService.parseMessage(data);
+      final messageType = MessageService.getMessageType(message);
+      
+      switch (messageType) {
+        case MessageType.hostBroadcast:
+          _handleHostBroadcast(message);
+          break;
+        case MessageType.raffleResults:
+          _handleRaffleResults(message);
+          break;
+        default:
+          // 忽略其他类型的消息
+          break;
+      }
+    } catch (e) {
+      print('处理消息出错：$e');
+    }
+  }
+  
+  // 处理房主广播
+  void _handleHostBroadcast(Map<String, dynamic> message) {
+    // 检查是否是发给当前用户的消息
+    if (message['targetUserUuid'] != _userUuid) {
+      return;
+    }
+    
+    final hostName = message['hostName'] as String;
+    final prizes = (message['prizes'] as List)
+        .map((e) => Prize.fromJson(e))
+        .toList();
+    
+    setState(() {
+      _hostName = hostName;
+      _prizes = prizes;
+      _isConnected = true;
+      _connectionState = ConnectionState.done;
+    });
+  }
+  
+  // 处理抽奖结果
+  void _handleRaffleResults(Map<String, dynamic> message) {
+    final result = RaffleResult.fromJson(message['result']);
+    final myPrizeId = result.userPrizePairs[_userUuid];
+    
+    String? prizeName;
+    if (myPrizeId != null) {
+      final prize = _prizes.firstWhere(
+        (p) => p.id == myPrizeId,
+        orElse: () => Prize(id: '', name: '未知奖品'),
+      );
+      prizeName = prize.name;
+    }
+    
+    setState(() {
+      _myPrizeResult = prizeName;
+    });
+    
+    // 显示抽奖结果
+    _showResultDialog(prizeName);
+  }
+  
+  // 显示抽奖结果对话框
+  void _showResultDialog(String? prizeName) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('抽奖结果'),
+        content: prizeName != null
+            ? Text('恭喜您获得了: $prizeName')
+            : const Text('很遗憾，您未能中奖'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('参与者-加入抽奖')),
+      appBar: AppBar(
+        title: const Text('参与抽奖'),
+        actions: [
+          if (_isConnected)
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: _stopClient,
+              tooltip: '断开连接',
+            ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: _connected
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('房间：${_roomInfo ?? ''}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                  const SizedBox(height: 8),
-                  Text('奖品：${_prizesInfo ?? ''}', style: const TextStyle(fontSize: 16)),
-                  const SizedBox(height: 24),
-                  if (!_confirmed)
-                    ElevatedButton(
-                      onPressed: _confirmJoin,
-                      child: const Text('确认加入'),
-                    ),
-                  if (_confirmed)
-                    const Text('已确认加入，等待开奖...', style: TextStyle(color: Colors.green)),
-
-                  // 显示获奖列表
-                  if (_winnersList.isNotEmpty) ...[
-                    const SizedBox(height: 24),
-                    const Text('获奖名单', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: _winnersList.length,
-                        itemBuilder: (context, index) {
-                          final winner = _winnersList[index];
-                          final isMe = winner['uuid'] == _uuid;
-                          
-                          return ListTile(
-                            title: Text(winner['name']),
-                            subtitle: Text('获得: ${winner['prize']}'),
-                            leading: CircleAvatar(
-                              backgroundColor: isMe ? Colors.amber : Colors.blue,
-                              child: Icon(
-                                Icons.emoji_events, 
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                            ),
-                            tileColor: isMe ? Colors.amber.withOpacity(0.1) : null,
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                  
-                  // 显示自己的中奖信息
-                  if (_isWinner && _myPrize != null) ...[
-                    const SizedBox(height: 24),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.amber),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.emoji_events, color: Colors.amber, size: 36),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text('恭喜你！', 
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 18,
-                                  )
-                                ),
-                                Text('你获得了: $_myPrize', 
-                                  style: const TextStyle(fontSize: 16)),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ] else if (_winnersList.isNotEmpty && !_isWinner) ...[
-                    const SizedBox(height: 24),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.sentiment_dissatisfied, color: Colors.grey, size: 36),
-                          SizedBox(width: 16),
-                          Expanded(
-                            child: Text('很遗憾，你未能中奖', 
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: Colors.grey,
-                              )
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
-              )
-            : Column(
-                children: [
-                  TextField(
-                    controller: _nameController,
-                    decoration: const InputDecoration(labelText: '用户名'),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _portController,
-                    decoration: const InputDecoration(labelText: '端口号'),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton(
-                    onPressed: _connecting ? null : _connectRoom,
-                    child: _connecting 
-                      ? const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              width: 20, 
-                              height: 20, 
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                            SizedBox(width: 12),
-                            Text('连接中...'),
-                          ],
-                        )
-                      : const Text('连接房间'),
-                  ),
-                ],
-              ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: _isConnected ? _buildConnectedView() : _buildConnectView(),
+        ),
       ),
     );
+  }
+  
+  // 已连接视图
+  List<Widget> _buildConnectedView() {
+    return [
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('房间名称: $_hostName', style: const TextStyle(fontSize: 18)),
+              Text('您的名称: $_userName', style: const TextStyle(fontSize: 16)),
+              Text('状态: ${_isConfirmed ? '已确认参与' : '等待确认参与'}', 
+                style: TextStyle(
+                  fontSize: 16, 
+                  color: _isConfirmed ? Colors.green : Colors.orange
+                )),
+              if (_myPrizeResult != null)
+                Text(
+                  '抽奖结果: ${_myPrizeResult != null ? '恭喜获得 $_myPrizeResult' : '未中奖'}',
+                  style: TextStyle(
+                    fontSize: 18, 
+                    fontWeight: FontWeight.bold,
+                    color: _myPrizeResult != null ? Colors.red : Colors.grey,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: 16),
+      
+      if (!_isConfirmed)
+        Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('奖品列表:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _prizes.length,
+                  itemBuilder: (context, index) {
+                    final prize = _prizes[index];
+                    return ListTile(
+                      title: Text(prize.name),
+                      subtitle: prize.description.isNotEmpty ? Text(prize.description) : null,
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+              Center(
+                child: ElevatedButton(
+                  onPressed: _sendConfirmation,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                    backgroundColor: Colors.green,
+                  ),
+                  child: const Text('确认参与抽奖', style: TextStyle(color: Colors.white)),
+                ),
+              ),
+            ],
+          ),
+        )
+      else
+        Expanded(
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.check_circle_outline, size: 80, color: Colors.green),
+                const SizedBox(height: 16),
+                const Text('已确认参与抽奖', style: TextStyle(fontSize: 20)),
+                const SizedBox(height: 8),
+                const Text('请等待房主开奖...', style: TextStyle(fontSize: 16, color: Colors.grey)),
+              ],
+            ),
+          ),
+        ),
+    ];
+  }
+  
+  // 连接视图
+  List<Widget> _buildConnectView() {
+    return [
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('欢迎 $_userName', style: const TextStyle(fontSize: 18)),
+              const SizedBox(height: 16),
+              const Text('请输入抽奖房间的端口号:'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _portController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: '端口号',
+                  hintText: '例如: 8000',
+                  border: OutlineInputBorder(),
+                ),
+                enabled: _connectionState != ConnectionState.waiting,
+              ),
+              const SizedBox(height: 16),
+              Center(
+                child: ElevatedButton(
+                  onPressed: _connectionState != ConnectionState.waiting ? _startClient : null,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                  ),
+                  child: _connectionState == ConnectionState.waiting
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('连接房间'),
+                ),
+              ),
+              if (_errorMessage != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16.0),
+                  child: Text(
+                    _errorMessage!,
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      const Expanded(
+        child: Center(
+          child: Text('连接后将看到房间信息和奖品列表'),
+        ),
+      ),
+    ];
   }
 }

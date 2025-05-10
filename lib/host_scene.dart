@@ -1,10 +1,16 @@
-import 'dart:math';
+import 'dart:async';
 import 'dart:typed_data';
-import 'dart:convert'; // 添加JSON支持
+
 import 'package:flutter/material.dart';
-import 'services/udp_service.dart';
-import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+
+import 'models/prize.dart';
+import 'models/raffle_result.dart';
+import 'models/user.dart';
+import 'services/message_service.dart';
+import 'services/raffle_service.dart';
+import 'services/udp_service.dart';
 
 class HostPage extends StatefulWidget {
   const HostPage({super.key});
@@ -14,442 +20,462 @@ class HostPage extends StatefulWidget {
 }
 
 class _HostPageState extends State<HostPage> {
-  final TextEditingController _roomNameController = TextEditingController();
-  final TextEditingController _hostNameController = TextEditingController(text: '房主'); // 添加房主名称输入
-
-  final List<Map<String, dynamic>> _prizes = [];
-  final Map<String, String> _query = {}; // uuid to username
-  final Map<String, String> _participants = {}; // uuid to username
-  final Map<String, bool> _confirmedParticipants = {}; // uuid to confirmation status
-  final List<Map<String, dynamic>> _winners = []; // 获奖者列表
-  UdpService? _udpService;
-  int? _port;
-  bool _isStarted = false;
-  bool _isDrawing = false; // 正在抽奖
-  bool _hostJoins = false; // 房主是否参与抽奖
-  String? _hostUuid; // 房主UUID
-
+  final UdpService _udpService = UdpService();
+  final String _multicastAddress = "224.15.0.15";
+  final List<int> _availablePorts = List.generate(5, (index) => 8000 + index);
+  
+  late final String _hostName;
+  late final String _userUuid;
+  late int _selectedPort;
+  
+  final List<Prize> _prizes = [];
+  final List<User> _users = [];
+  bool _isRaffling = false;
+  bool _isServerRunning = false;
+  RaffleResult? _raffleResult;
+  
+  final _nameController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _quantityController = TextEditingController(text: "1"); // 添加数量控制器
+  
   @override
   void initState() {
     super.initState();
-    _initUuid(); // 初始化房主UUID
+    _loadUserInfo();
   }
-
-  Future<void> _initUuid() async {
-    final prefs = await SharedPreferences.getInstance();
-    String? uuid = prefs.getString('host_uuid');
-    if (uuid == null) {
-      uuid = const Uuid().v4();
-      await prefs.setString('host_uuid', uuid);
-    }
-    _hostUuid = uuid;
-  }
-
+  
   @override
   void dispose() {
-    _udpService?.close();
-    _roomNameController.dispose();
-    _hostNameController.dispose();
+    _stopServer();
+    _nameController.dispose();
+    _descriptionController.dispose();
+    _quantityController.dispose(); // 释放数量控制器
     super.dispose();
   }
-
-  // 添加奖品时支持输入名称和数量
-  void _addPrize() async {
-    final nameController = TextEditingController();
-    final countController = TextEditingController(text: '1');
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('添加奖品'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-                controller: nameController,
-                autofocus: true,
-                decoration: const InputDecoration(labelText: '奖品名称')),
-            TextField(
-                controller: countController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: '数量')),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context), child: const Text('取消')),
-          TextButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              final count = int.tryParse(countController.text.trim()) ?? 1;
-              if (name.isNotEmpty && count > 0) {
-                Navigator.pop(context, {'name': name, 'count': count});
-              }
-            },
-            child: const Text('确定'),
-          ),
-        ],
-      ),
-    );
-    if (result != null) {
-      setState(() {
-        _prizes.add(result);
-      });
-    }
-  }
-
-  // 编辑奖品
-  void _editPrize(int index) async {
-    final prize = _prizes[index];
-    final nameController = TextEditingController(text: prize['name']);
-    final countController =
-        TextEditingController(text: prize['count'].toString());
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('编辑奖品'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-                controller: nameController,
-                autofocus: true,
-                decoration: const InputDecoration(labelText: '奖品名称')),
-            TextField(
-                controller: countController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: '数量')),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context), child: const Text('取消')),
-          TextButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              final count = int.tryParse(countController.text.trim()) ?? 1;
-              if (name.isNotEmpty && count > 0) {
-                Navigator.pop(context, {'name': name, 'count': count});
-              }
-            },
-            child: const Text('确定'),
-          ),
-        ],
-      ),
-    );
-    if (result != null) {
-      setState(() {
-        _prizes[index] = result;
-      });
-    }
-  }
-
-  void _removePrize(int index) {
-    setState(() {
-      _prizes.removeAt(index);
-    });
-  }
-
-  // 获取奖品总数
-  int get _totalPrizeCount {
-    return _prizes.fold(0, (sum, prize) => sum + (prize['count'] as int));
-  }
-
-  // 生成奖品信息字符串
-  String _getPrizesInfoString() {
-    return _prizes.map((p) => "${p['name']}(${p['count']}份)").join('、');
-  }
-
-  Future<void> _startRaffle() async {
-    if (_roomNameController.text.trim().isEmpty || _prizes.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('请填写房间名并添加奖品')));
-      return;
-    }
+  
+  // 加载用户信息
+  Future<void> _loadUserInfo() async {
+    final prefs = await SharedPreferences.getInstance();
+    _hostName = prefs.getString('user_name') ?? '未命名房主';
+    _userUuid = prefs.getString('user_uuid') ?? const Uuid().v4();
+    _selectedPort = _availablePorts.first;
     
-    if (_hostJoins && _hostNameController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('如果房主参与抽奖，请填写房主名称')));
-      return;
-    }
-    
-    final random = Random();
-    final port = 20000 + random.nextInt(10000);
-    _udpService = UdpService();
-    await _udpService!.bind(multicastAddress: '224.1.0.1', port: port);
-    
-    // 如果房主参与抽奖，将房主添加到参与者列表
-    if (_hostJoins && _hostUuid != null) {
-      _participants[_hostUuid!] = _hostNameController.text.trim();
-      _confirmedParticipants[_hostUuid!] = true; // 房主自动确认
-    }
-    
-    setState(() {
-      _port = port;
-      _isStarted = true;
-    });
-    
-    // 监听参与者加入请求
-    _udpService!.onData.listen((datagram) {
-      final data = String.fromCharCodes(datagram.data);
-      final parts = data.split('|');
+    setState(() {});
+  }
+  
+  // 启动服务器
+  Future<void> _startServer() async {
+    try {
+      await _udpService.bind(
+        multicastAddress: _multicastAddress,
+        port: _selectedPort,
+      );
       
-      if (parts.length >= 2) {
-        final uuid = parts[0];
-        final action = parts[1];
-        
-        if (action == 'confirm') {
-          // 处理参与者确认加入
-          if (_participants.containsKey(uuid)) {
-            setState(() {
-              _confirmedParticipants[uuid] = true;
-            });
-          }
-        } else {
-          // 处理新参与者加入请求
-          final username = action; // 第二部分是用户名
-          setState(() {
-            _query[uuid] = username;
-          });
-          
-          // 立即回复房间信息和奖品信息
-          final roomInfo = 'room:${_roomNameController.text}|prizes:${_getPrizesInfoString()}';
-          _udpService!.send(Uint8List.fromList(roomInfo.codeUnits));
-          
-          setState(() {
-            _participants[uuid] = username;
-          });
-        }
-      }
-    });
-  }
-
-  void _drawWinner() async {
-    if (_participants.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('暂无参与者')));
-      return;
-    }
-
-    // 防止重复抽奖
-    if (_isDrawing) return;
-    
-    setState(() {
-      _isDrawing = true;
-      _winners.clear();
-    });
-
-    // 准备抽奖池：将每个奖品按数量扩展
-    final List<Map<String, dynamic>> prizePool = [];
-    for (var prize in _prizes) {
-      for (var i = 0; i < (prize['count'] as int); i++) {
-        prizePool.add({'name': prize['name'], 'original': prize});
-      }
-    }
-    
-    // 移除未确认的用户，只保留已确认的参与者
-    final confirmedParticipants = <String, String>{};
-    _participants.forEach((uuid, username) {
-      if (_confirmedParticipants[uuid] == true) {
-        confirmedParticipants[uuid] = username;
-      }
-    });
-    
-    // 显示移除未确认用户的提示
-    final removedCount = _participants.length - confirmedParticipants.length;
-    if (removedCount > 0) {
+      _udpService.onData.listen(_handleIncomingMessage);
+      
+      setState(() {
+        _isServerRunning = true;
+      });
+      
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已移除 $removedCount 名未确认的参与者'))
+        SnackBar(content: Text('抽奖房间已开启，端口：$_selectedPort')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('启动服务器失败：$e')),
       );
     }
-    
-    // 更新参与者列表，移除未确认用户
+  }
+  
+  // 停止服务器
+  void _stopServer() {
+    _udpService.close();
     setState(() {
-      _participants.clear();
-      _participants.addAll(confirmedParticipants);
+      _isServerRunning = false;
+      _users.clear();
+      _raffleResult = null;
+    });
+  }
+  
+  // 处理接收到的消息
+  void _handleIncomingMessage(dynamic datagram) {
+    try {
+      final data = datagram.data as Uint8List;
+      final message = MessageService.parseMessage(data);
+      final messageType = MessageService.getMessageType(message);
+      
+      switch (messageType) {
+        case MessageType.userJoin:
+          _handleUserJoin(message);
+          break;
+        case MessageType.userConfirm:
+          _handleUserConfirm(message);
+          break;
+        default:
+          // 忽略其他类型的消息
+          break;
+      }
+    } catch (e) {
+      print('处理消息出错：$e');
+    }
+  }
+  
+  // 处理用户加入请求
+  void _handleUserJoin(Map<String, dynamic> message) {
+    final user = User.fromJson(message['user']);
+    
+    // 检查是否已经有该UUID的用户
+    final existingUserIndex = _users.indexWhere((u) => u.uuid == user.uuid);
+    
+    if (existingUserIndex >= 0) {
+      // 更新现有用户
+      setState(() {
+        _users[existingUserIndex] = user;
+      });
+    } else {
+      // 添加新用户
+      setState(() {
+        _users.add(user);
+      });
+    }
+    
+    // 回复房间信息
+    _sendRoomInfo(user.uuid);
+  }
+  
+  // 处理用户确认加入
+  void _handleUserConfirm(Map<String, dynamic> message) {
+    final user = User.fromJson(message['user']);
+    
+    // 更新用户确认状态
+    final index = _users.indexWhere((u) => u.uuid == user.uuid);
+    if (index >= 0) {
+      setState(() {
+        _users[index].confirmed = true;
+      });
+    }
+  }
+  
+  // 发送房间信息给指定用户
+  void _sendRoomInfo(String userUuid) {
+    final message = MessageService.buildHostBroadcastMessage(
+      _hostName,
+      _prizes,
+      userUuid,
+    );
+    _udpService.send(message);
+  }
+  
+  // 执行抽奖
+  void _startRaffle() {
+    if (_prizes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先添加至少一个奖品')),
+      );
+      return;
+    }
+    
+    final confirmedUsers = _users.where((user) => user.confirmed).toList();
+    
+    if (confirmedUsers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('暂无已确认的参与者')),
+      );
+      return;
+    }
+    
+    setState(() {
+      _isRaffling = true;
     });
     
-    // 如果没有已确认的参与者，则提示并退出
-    if (confirmedParticipants.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('没有已确认的参与者，无法开奖')));
+    // 模拟抽奖过程
+    Future.delayed(const Duration(seconds: 2), () {
+      final result = RaffleService.drawRaffle(confirmedUsers, _prizes);
+      
       setState(() {
-        _isDrawing = false;
+        _raffleResult = result;
+        _isRaffling = false;
       });
+      
+      // 广播抽奖结果
+      final message = MessageService.buildRaffleResultsMessage(result);
+      _udpService.send(message);
+    });
+  }
+  
+  // 添加奖品
+  void _addPrize() {
+    if (_nameController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('奖品名称不能为空')),
+      );
       return;
     }
     
-    // 获取已确认的参与者UUID
-    final confirmedUuids = confirmedParticipants.keys.toList();
-    
-    // 决定要抽取的人数（取参与者人数和奖品总数的较小值）
-    final int drawCount = min(confirmedUuids.length, prizePool.length);
-    
-    if (drawCount == 0) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('没有可发放的奖品或确认的参与者')));
-      setState(() {
-        _isDrawing = false;
-      });
+    // 验证数量
+    int quantity = 1;
+    try {
+      quantity = int.parse(_quantityController.text.trim());
+      if (quantity <= 0) throw FormatException('数量必须大于0');
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('奖品数量必须是大于0的整数')),
+      );
       return;
-    }
-    
-    // 打乱参与者顺序
-    confirmedUuids.shuffle();
-    
-    // 打乱奖品顺序
-    prizePool.shuffle();
-    
-    // 分配奖品
-    for (var i = 0; i < drawCount; i++) {
-      final uuid = confirmedUuids[i];
-      final username = confirmedParticipants[uuid]!;
-      final prize = prizePool[i]['name'];
-      
-      // 添加到获奖者列表
-      _winners.add({
-        'uuid': uuid,
-        'name': username,
-        'prize': prize
-      });
-      
-      // 使用prize|JSON格式广播获奖信息
-      final winnerData = {
-        'uuid': uuid,
-        'name': username,
-        'prize': prize
-      };
-      final winnerJson = jsonEncode(winnerData);
-      final winnerMsg = 'prize|$winnerJson';
-      _udpService!.send(Uint8List.fromList(winnerMsg.codeUnits));
-      
-      // 添加短暂延迟，确保消息能够分开发送
-      await Future.delayed(const Duration(milliseconds: 100));
     }
     
     setState(() {
-      _isDrawing = false;
+      _prizes.add(Prize(
+        id: const Uuid().v4(),
+        name: _nameController.text.trim(),
+        description: _descriptionController.text.trim(),
+        quantity: quantity, // 添加数量
+      ));
+      _nameController.clear();
+      _descriptionController.clear();
+      _quantityController.text = "1"; // 重置为默认值
+    });
+  }
+  
+  // 删除奖品
+  void _removePrize(String id) {
+    setState(() {
+      _prizes.removeWhere((prize) => prize.id == id);
     });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('房主-局域网抽奖')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: ListView(
-          children: [
-            TextField(
-              controller: _roomNameController,
-              decoration: const InputDecoration(labelText: '房间名称'),
-              enabled: !_isStarted,
+      appBar: AppBar(
+        title: const Text('创建抽奖房间'),
+        actions: [
+          if (_isServerRunning)
+            IconButton(
+              icon: const Icon(Icons.stop),
+              onPressed: _stopServer,
+              tooltip: '停止抽奖房间',
             ),
-            const SizedBox(height: 16),
-            
-            // 添加房主参与抽奖选项
-            if (!_isStarted)
-              Column(
-                children: [
-                  CheckboxListTile(
-                    title: const Text('房主参与抽奖'),
-                    value: _hostJoins,
-                    onChanged: (value) {
-                      setState(() {
-                        _hostJoins = value ?? false;
-                      });
-                    },
-                    controlAffinity: ListTileControlAffinity.leading,
-                  ),
-                  if (_hostJoins)
-                    TextField(
-                      controller: _hostNameController,
-                      decoration: const InputDecoration(labelText: '房主名称'),
-                    ),
-                  const SizedBox(height: 16),
-                ],
-              ),
-              
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('奖品列表',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                if (!_isStarted)
-                  IconButton(onPressed: _addPrize, icon: const Icon(Icons.add)),
-              ],
-            ),
-            ..._prizes.asMap().entries.map((e) => ListTile(
-                  title: Text('${e.value['name']} (${e.value['count']})'),
-                  trailing: !_isStarted
-                      ? Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.edit),
-                              onPressed: () => _editPrize(e.key),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.delete),
-                              onPressed: () => _removePrize(e.key),
-                            ),
-                          ],
-                        )
-                      : null,
-                )),
-            const SizedBox(height: 16),
-            if (!_isStarted)
-              ElevatedButton(
-                onPressed: _startRaffle,
-                child: const Text('开始抽奖'),
-              ),
-            if (_isStarted && _port != null)
-              Column(
+        ],
+      ),
+      body: _isServerRunning ? _buildServerRunningView() : _buildSetupView(),
+    );
+  }
+  
+  // 服务器运行中的视图
+  Widget _buildServerRunningView() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('已开始，端口: $_port', style: const TextStyle(color: Colors.green)),
-                  const SizedBox(height: 16),
-                  const Text('已加入参与者：', style: TextStyle(fontWeight: FontWeight.bold)),
-                  SizedBox(
-                    height: 200,
-                    child: _participants.isEmpty 
-                      ? const Center(child: Text('暂无参与者'))
-                      : ListView.builder(
-                          itemCount: _participants.length,
-                          itemBuilder: (context, index) {
-                            final uuid = _participants.keys.elementAt(index);
-                            final name = _participants[uuid]!;
-                            final confirmed = _confirmedParticipants[uuid] ?? false;
-                            
-                            return ListTile(
-                              leading: CircleAvatar(child: Text('${index + 1}')),
-                              title: Text(name),
-                              subtitle: Text(confirmed ? '已确认' : '未确认'),
-                              trailing: confirmed 
-                                ? const Icon(Icons.check_circle, color: Colors.green)
-                                : const Icon(Icons.hourglass_empty),
-                            );
-                          },
-                        ),
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton(
-                    onPressed: _isDrawing ? null : _drawWinner,
-                    child: _isDrawing 
-                      ? const CircularProgressIndicator() 
-                      : const Text('开始抽奖'),
-                  ),
-                  if (_winners.isNotEmpty) ...[
-                    const SizedBox(height: 24),
-                    const Text('获奖名单：', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ...(_winners.map((winner) => ListTile(
-                      title: Text('${winner['name']} - ${winner['prize']}'),
-                      leading: const Icon(Icons.emoji_events, color: Colors.amber),
-                    ))),
-                  ]
+                  Text('房间名称: $_hostName的抽奖', style: const TextStyle(fontSize: 18)),
+                  Text('房间端口: $_selectedPort', style: const TextStyle(fontSize: 16)),
+                  Text('参与人数: ${_users.length}人 (已确认: ${_users.where((u) => u.confirmed).length}人)', 
+                    style: const TextStyle(fontSize: 16)),
                 ],
               ),
-          ],
-        ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          
+          // 奖品列表
+          const Text('奖品列表:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Expanded(
+            flex: 2,
+            child: _prizes.isEmpty
+              ? const Center(child: Text('暂无奖品，请添加'))
+              : ListView.builder(
+                  itemCount: _prizes.length,
+                  itemBuilder: (context, index) {
+                    final prize = _prizes[index];
+                    return ListTile(
+                      title: Text('${prize.name} (${prize.quantity}个)'),
+                      subtitle: prize.description.isNotEmpty ? Text(prize.description) : null,
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete),
+                        onPressed: _raffleResult == null ? () => _removePrize(prize.id) : null,
+                      ),
+                    );
+                  },
+                ),
+          ),
+          
+          // 参与者列表
+          const SizedBox(height: 8),
+          const Text('参与者列表:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Expanded(
+            flex: 3,
+            child: _users.isEmpty 
+              ? const Center(child: Text('等待参与者加入...'))
+              : ListView.builder(
+                  itemCount: _users.length,
+                  itemBuilder: (context, index) {
+                    final user = _users[index];
+                    String? prizeInfo;
+                    
+                    if (_raffleResult != null) {
+                      final prizeId = _raffleResult!.userPrizePairs[user.uuid];
+                      final prizeName = RaffleService.getPrizeName(_prizes, prizeId);
+                      prizeInfo = prizeName != null ? '中奖: $prizeName' : '未中奖';
+                    }
+                    
+                    return ListTile(
+                      leading: Icon(
+                        user.confirmed ? Icons.check_circle : Icons.hourglass_empty,
+                        color: user.confirmed ? Colors.green : Colors.amber,
+                      ),
+                      title: Text(user.name),
+                      subtitle: prizeInfo != null ? Text(prizeInfo) : null,
+                    );
+                  },
+                ),
+          ),
+          
+          // 操作按钮
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16.0),
+              child: ElevatedButton(
+                onPressed: _raffleResult == null && !_isRaffling ? _startRaffle : null,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                ),
+                child: _isRaffling
+                  ? const SizedBox(
+                      width: 20, 
+                      height: 20, 
+                      child: CircularProgressIndicator(strokeWidth: 2)
+                    )
+                  : Text(_raffleResult == null ? '开始抽奖' : '抽奖已完成'),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  // 设置视图（添加奖品、设置端口等）
+  Widget _buildSetupView() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 端口选择
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('选择房间端口:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  DropdownButton<int>(
+                    value: _selectedPort,
+                    items: _availablePorts.map((port) => 
+                      DropdownMenuItem(
+                        value: port,
+                        child: Text('端口 $port'),
+                      )
+                    ).toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedPort = value!;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          
+          // 添加奖品
+          const Text('添加奖品:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _nameController,
+            decoration: const InputDecoration(
+              labelText: '奖品名称',
+              border: OutlineInputBorder(),
+              hintText: '输入奖品名称',
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _descriptionController,
+            decoration: const InputDecoration(
+              labelText: '奖品描述 (可选)',
+              border: OutlineInputBorder(),
+              hintText: '输入奖品描述',
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _quantityController,
+            decoration: const InputDecoration(
+              labelText: '奖品数量',
+              border: OutlineInputBorder(),
+              hintText: '输入奖品数量',
+            ),
+            keyboardType: TextInputType.number, // 使用数字键盘
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              ElevatedButton(
+                onPressed: _addPrize,
+                child: const Text('添加奖品'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          
+          // 奖品列表
+          const Text('已添加的奖品:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Expanded(
+            child: _prizes.isEmpty
+              ? const Center(child: Text('暂无奖品，请添加'))
+              : ListView.builder(
+                  itemCount: _prizes.length,
+                  itemBuilder: (context, index) {
+                    final prize = _prizes[index];
+                    return ListTile(
+                      title: Text('${prize.name} (${prize.quantity}个)'),
+                      subtitle: prize.description.isNotEmpty ? Text(prize.description) : null,
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete),
+                        onPressed: () => _removePrize(prize.id),
+                      ),
+                    );
+                  },
+                ),
+          ),
+          
+          // 启动服务器按钮
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16.0),
+              child: ElevatedButton(
+                onPressed: _prizes.isNotEmpty ? _startServer : null,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                  backgroundColor: Colors.green,
+                ),
+                child: const Text('开始抽奖', style: TextStyle(color: Colors.white)),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
