@@ -283,38 +283,40 @@ class _JoinPageState extends State<JoinPage> {
         ),
       ),
       const SizedBox(height: 16),
-      
-      if (!_isConfirmed)
-        Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('奖品列表:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: _prizes.length,
-                  itemBuilder: (context, index) {                    final prize = _prizes[index];
-                    return ListTile(
-                      title: Text('${prize.name} (${prize.quantity}个)'),
-                      subtitle: prize.description.isNotEmpty ? Text(prize.description) : null,
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 16),
-              Center(
-                child: ElevatedButton(
-                  onPressed: _sendConfirmation,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                    backgroundColor: Colors.green,
+        if (!_isConfirmed)
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('奖品列表:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _prizes.length,
+                    itemBuilder: (context, index) {                    
+                      final prize = _prizes[index];
+                      return ListTile(
+                        title: Text('${prize.name} (${prize.quantity}个)'),
+                        subtitle: prize.description.isNotEmpty ? Text(prize.description) : null,
+                      );
+                    },
                   ),
-                  child: const Text('确认参与抽奖', style: TextStyle(color: Colors.white)),
                 ),
-              ),
-            ],
+                const SizedBox(height: 16),
+                Center(
+                  child: ElevatedButton(
+                    onPressed: _sendConfirmation,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                      backgroundColor: Colors.green,
+                    ),
+                    child: const Text('确认参与抽奖', style: TextStyle(color: Colors.white)),
+                  ),
+                ),
+              ],
+            ),
           ),
         )
       else

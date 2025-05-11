@@ -244,6 +244,65 @@ class _HostPageState extends State<HostPage> {
     });
   }
 
+  // 显示全部抽奖结果的对话框
+  void _showAllRaffleResults() {
+    if (_raffleResult == null) return;
+    
+    // 获取所有确认的用户和他们的中奖情况
+    final List<Widget> resultWidgets = [];
+    
+    for (final user in _users.where((u) => u.confirmed)) {
+      final prizeId = _raffleResult!.userPrizePairs[user.uuid];
+      String resultText;
+      
+      if (prizeId != null) {
+        final prize = _prizes.firstWhere(
+          (p) => p.id == prizeId,
+          orElse: () => Prize(id: '', name: '未知奖品'),
+        );
+        resultText = '${user.name}: 中奖 - ${prize.name}';
+      } else {
+        resultText = '${user.name}: 未中奖';
+      }
+      
+      resultWidgets.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4.0),
+          child: Text(
+            resultText,
+            style: TextStyle(
+              fontSize: 16,
+              color: prizeId != null ? Colors.green : Colors.grey,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // 显示对话框
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('抽奖结果一览'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: resultWidgets.isEmpty 
+              ? [const Text('暂无用户参与抽奖')] 
+              : resultWidgets,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -339,23 +398,39 @@ class _HostPageState extends State<HostPage> {
                   },
                 ),
           ),
-          
-          // 操作按钮
+            // 操作按钮
           Center(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 16.0),
-              child: ElevatedButton(
-                onPressed: _raffleResult == null && !_isRaffling ? _startRaffle : null,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                ),
-                child: _isRaffling
-                  ? const SizedBox(
-                      width: 20, 
-                      height: 20, 
-                      child: CircularProgressIndicator(strokeWidth: 2)
-                    )
-                  : Text(_raffleResult == null ? '开始抽奖' : '抽奖已完成'),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton(
+                    onPressed: _raffleResult == null && !_isRaffling ? _startRaffle : null,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                    ),
+                    child: _isRaffling
+                      ? const SizedBox(
+                          width: 20, 
+                          height: 20, 
+                          child: CircularProgressIndicator(strokeWidth: 2)
+                        )
+                      : Text(_raffleResult == null ? '开始抽奖' : '抽奖已完成'),
+                  ),
+                  if (_raffleResult != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 16.0),
+                      child: ElevatedButton(
+                        onPressed: _showAllRaffleResults,
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                          backgroundColor: Colors.blue,
+                        ),
+                        child: const Text('查看完整抽奖结果', style: TextStyle(color: Colors.white)),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),
