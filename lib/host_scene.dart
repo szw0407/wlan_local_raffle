@@ -32,6 +32,7 @@ class _HostPageState extends State<HostPage> {
   final List<User> _users = [];
   bool _isRaffling = false;
   bool _isServerRunning = false;
+  bool _includeHostInRaffle = false; // 是否将房主加入抽奖
   RaffleResult? _raffleResult;
   
   final _nameController = TextEditingController();
@@ -165,8 +166,7 @@ class _HostPageState extends State<HostPage> {
     );
     _udpService.send(message);
   }
-  
-  // 执行抽奖
+    // 执行抽奖
   void _startRaffle() {
     if (_prizes.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -175,7 +175,22 @@ class _HostPageState extends State<HostPage> {
       return;
     }
     
+    // 获取已确认的参与者
     final confirmedUsers = _users.where((user) => user.confirmed).toList();
+    
+    // 如果选择了将房主加入抽奖，则添加房主
+    if (_includeHostInRaffle) {
+      // 创建房主用户对象并加入列表
+      final hostUser = User(
+        uuid: _userUuid, 
+        name: '$_hostName(房主)',
+      );
+      
+      // 确保不会添加重复用户
+      if (!confirmedUsers.any((user) => user.uuid == _userUuid)) {
+        confirmedUsers.add(hostUser);
+      }
+    }
     
     if (confirmedUsers.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -243,7 +258,6 @@ class _HostPageState extends State<HostPage> {
       _prizes.removeWhere((prize) => prize.id == id);
     });
   }
-
   // 显示全部抽奖结果的对话框
   void _showAllRaffleResults() {
     if (_raffleResult == null) return;
@@ -251,6 +265,7 @@ class _HostPageState extends State<HostPage> {
     // 获取所有确认的用户和他们的中奖情况
     final List<Widget> resultWidgets = [];
     
+    // 处理普通参与者的抽奖结果
     for (final user in _users.where((u) => u.confirmed)) {
       final prizeId = _raffleResult!.userPrizePairs[user.uuid];
       String resultText;
@@ -277,6 +292,48 @@ class _HostPageState extends State<HostPage> {
           ),
         ),
       );
+    }
+    
+    // 如果房主参与了抽奖，显示房主的抽奖结果
+    if (_includeHostInRaffle) {
+      final prizeId = _raffleResult!.userPrizePairs[_userUuid];
+      
+      if (prizeId != null) {
+        final prize = _prizes.firstWhere(
+          (p) => p.id == prizeId,
+          orElse: () => Prize(id: '', name: '未知奖品'),
+        );
+        final resultText = '$_hostName(房主): 中奖 - ${prize.name}';
+        
+        resultWidgets.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4.0),
+            child: Text(
+              resultText,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.green,
+              ),
+            ),
+          ),
+        );
+      } else if (_raffleResult!.userPrizePairs.containsKey(_userUuid)) {
+        // 房主参与但未中奖
+        resultWidgets.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4.0),
+            child: Text(
+              '$_hostName(房主): 未中奖',
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey,
+              ),
+            ),
+          ),
+        );
+      }
     }
 
     // 显示对话框
@@ -536,6 +593,23 @@ class _HostPageState extends State<HostPage> {
                     );
                   },
                 ),
+          ),
+            // 添加"将自己加入抽奖"的选项
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: Row(
+              children: [
+                Checkbox(
+                  value: _includeHostInRaffle,
+                  onChanged: (value) {
+                    setState(() {
+                      _includeHostInRaffle = value ?? false;
+                    });
+                  },
+                ),
+                const Text('将自己也加入抽奖'),
+              ],
+            ),
           ),
           
           // 启动服务器按钮
