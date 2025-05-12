@@ -23,28 +23,28 @@ class _HostPageState extends State<HostPage> {
   final UdpService _udpService = UdpService();
   final String _multicastAddress = "224.15.0.15";
   final List<int> _availablePorts = List.generate(5, (index) => 8000 + index);
-  
+
   late final String _hostName;
   late final String _userUuid;
   late int _selectedPort;
-  
+
   final List<Prize> _prizes = [];
   final List<User> _users = [];
   bool _isRaffling = false;
   bool _isServerRunning = false;
   bool _includeHostInRaffle = false; // 是否将房主加入抽奖
   RaffleResult? _raffleResult;
-  
+
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _quantityController = TextEditingController(text: "1"); // 添加数量控制器
-  
+
   @override
   void initState() {
     super.initState();
     _loadUserInfo();
   }
-  
+
   @override
   void dispose() {
     _stopServer();
@@ -53,31 +53,39 @@ class _HostPageState extends State<HostPage> {
     _quantityController.dispose(); // 释放数量控制器
     super.dispose();
   }
-  
+
   // 加载用户信息
   Future<void> _loadUserInfo() async {
     final prefs = await SharedPreferences.getInstance();
     _hostName = prefs.getString('user_name') ?? '未命名房主';
     _userUuid = prefs.getString('user_uuid') ?? const Uuid().v4();
     _selectedPort = _availablePorts.first;
-    
+
     setState(() {});
   }
-  
+
   // 启动服务器
   Future<void> _startServer() async {
+    // 如果房主加入了抽奖，则将房主信息添加到参与者列表
+
     try {
       await _udpService.bind(
         multicastAddress: _multicastAddress,
         port: _selectedPort,
       );
-      
+
       _udpService.onData.listen(_handleIncomingMessage);
-      
+      if (_includeHostInRaffle) {
+        _users.add(User(uuid: _userUuid, name: _hostName));
+      }
+      // 自动让房主确认加入
+      final hostUser = _users.firstWhere((user) => user.uuid == _userUuid);
+      hostUser.confirmed = true;
+
       setState(() {
         _isServerRunning = true;
       });
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('抽奖房间已开启，端口：$_selectedPort')),
       );
@@ -87,7 +95,7 @@ class _HostPageState extends State<HostPage> {
       );
     }
   }
-  
+
   // 停止服务器
   void _stopServer() {
     _udpService.close();
@@ -97,14 +105,14 @@ class _HostPageState extends State<HostPage> {
       _raffleResult = null;
     });
   }
-  
+
   // 处理接收到的消息
   void _handleIncomingMessage(dynamic datagram) {
     try {
       final data = datagram.data as Uint8List;
       final message = MessageService.parseMessage(data);
       final messageType = MessageService.getMessageType(message);
-      
+
       switch (messageType) {
         case MessageType.userJoin:
           _handleUserJoin(message);
@@ -120,14 +128,14 @@ class _HostPageState extends State<HostPage> {
       print('处理消息出错：$e');
     }
   }
-  
+
   // 处理用户加入请求
   void _handleUserJoin(Map<String, dynamic> message) {
     final user = User.fromJson(message['user']);
-    
+
     // 检查是否已经有该UUID的用户
     final existingUserIndex = _users.indexWhere((u) => u.uuid == user.uuid);
-    
+
     if (existingUserIndex >= 0) {
       // 更新现有用户
       setState(() {
@@ -139,15 +147,15 @@ class _HostPageState extends State<HostPage> {
         _users.add(user);
       });
     }
-    
+
     // 回复房间信息
     _sendRoomInfo(user.uuid);
   }
-  
+
   // 处理用户确认加入
   void _handleUserConfirm(Map<String, dynamic> message) {
     final user = User.fromJson(message['user']);
-    
+
     // 更新用户确认状态
     final index = _users.indexWhere((u) => u.uuid == user.uuid);
     if (index >= 0) {
@@ -156,7 +164,7 @@ class _HostPageState extends State<HostPage> {
       });
     }
   }
-  
+
   // 发送房间信息给指定用户
   void _sendRoomInfo(String userUuid) {
     final message = MessageService.buildHostBroadcastMessage(
@@ -166,7 +174,8 @@ class _HostPageState extends State<HostPage> {
     );
     _udpService.send(message);
   }
-    // 执行抽奖
+
+  // 执行抽奖
   void _startRaffle() {
     if (_prizes.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -174,50 +183,36 @@ class _HostPageState extends State<HostPage> {
       );
       return;
     }
-    
+
     // 获取已确认的参与者
     final confirmedUsers = _users.where((user) => user.confirmed).toList();
-    
-    // 如果选择了将房主加入抽奖，则添加房主
-    if (_includeHostInRaffle) {
-      // 创建房主用户对象并加入列表
-      final hostUser = User(
-        uuid: _userUuid, 
-        name: '$_hostName(房主)',
-      );
-      
-      // 确保不会添加重复用户
-      if (!confirmedUsers.any((user) => user.uuid == _userUuid)) {
-        confirmedUsers.add(hostUser);
-      }
-    }
-    
+
     if (confirmedUsers.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('暂无已确认的参与者')),
       );
       return;
     }
-    
+
     setState(() {
       _isRaffling = true;
     });
-    
+
     // 模拟抽奖过程
     Future.delayed(const Duration(seconds: 2), () {
       final result = RaffleService.drawRaffle(confirmedUsers, _prizes);
-      
+
       setState(() {
         _raffleResult = result;
         _isRaffling = false;
       });
-      
+
       // 广播抽奖结果
       final message = MessageService.buildRaffleResultsMessage(result);
       _udpService.send(message);
     });
   }
-  
+
   // 添加奖品
   void _addPrize() {
     if (_nameController.text.trim().isEmpty) {
@@ -226,7 +221,7 @@ class _HostPageState extends State<HostPage> {
       );
       return;
     }
-    
+
     // 验证数量
     int quantity = 1;
     try {
@@ -238,7 +233,7 @@ class _HostPageState extends State<HostPage> {
       );
       return;
     }
-    
+
     setState(() {
       _prizes.add(Prize(
         id: const Uuid().v4(),
@@ -251,25 +246,26 @@ class _HostPageState extends State<HostPage> {
       _quantityController.text = "1"; // 重置为默认值
     });
   }
-  
+
   // 删除奖品
   void _removePrize(String id) {
     setState(() {
       _prizes.removeWhere((prize) => prize.id == id);
     });
   }
+
   // 显示全部抽奖结果的对话框
   void _showAllRaffleResults() {
     if (_raffleResult == null) return;
-    
+
     // 获取所有确认的用户和他们的中奖情况
     final List<Widget> resultWidgets = [];
-    
+
     // 处理普通参与者的抽奖结果
     for (final user in _users.where((u) => u.confirmed)) {
       final prizeId = _raffleResult!.userPrizePairs[user.uuid];
       String resultText;
-      
+
       if (prizeId != null) {
         final prize = _prizes.firstWhere(
           (p) => p.id == prizeId,
@@ -279,7 +275,7 @@ class _HostPageState extends State<HostPage> {
       } else {
         resultText = '${user.name}: 未中奖';
       }
-      
+
       resultWidgets.add(
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -293,18 +289,18 @@ class _HostPageState extends State<HostPage> {
         ),
       );
     }
-    
+
     // 如果房主参与了抽奖，显示房主的抽奖结果
     if (_includeHostInRaffle) {
       final prizeId = _raffleResult!.userPrizePairs[_userUuid];
-      
+
       if (prizeId != null) {
         final prize = _prizes.firstWhere(
           (p) => p.id == prizeId,
           orElse: () => Prize(id: '', name: '未知奖品'),
         );
         final resultText = '$_hostName(房主): 中奖 - ${prize.name}';
-        
+
         resultWidgets.add(
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -345,9 +341,9 @@ class _HostPageState extends State<HostPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: resultWidgets.isEmpty 
-              ? [const Text('暂无用户参与抽奖')] 
-              : resultWidgets,
+            children: resultWidgets.isEmpty
+                ? [const Text('暂无用户参与抽奖')]
+                : resultWidgets,
           ),
         ),
         actions: [
@@ -377,7 +373,7 @@ class _HostPageState extends State<HostPage> {
       body: _isServerRunning ? _buildServerRunningView() : _buildSetupView(),
     );
   }
-  
+
   // 服务器运行中的视图
   Widget _buildServerRunningView() {
     return Padding(
@@ -391,71 +387,82 @@ class _HostPageState extends State<HostPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('房间名称: $_hostName的抽奖', style: const TextStyle(fontSize: 18)),
-                  Text('房间端口: $_selectedPort', style: const TextStyle(fontSize: 16)),
-                  Text('参与人数: ${_users.length}人 (已确认: ${_users.where((u) => u.confirmed).length}人)', 
-                    style: const TextStyle(fontSize: 16)),
+                  Text('房间名称: $_hostName的抽奖',
+                      style: const TextStyle(fontSize: 18)),
+                  Text('房间端口: $_selectedPort',
+                      style: const TextStyle(fontSize: 16)),
+                  Text(
+                      '参与人数: ${_users.length}人 (已确认: ${_users.where((u) => u.confirmed).length}人)',
+                      style: const TextStyle(fontSize: 16)),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 16),
-          
+
           // 奖品列表
-          const Text('奖品列表:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('奖品列表:',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           Expanded(
             flex: 2,
             child: _prizes.isEmpty
-              ? const Center(child: Text('暂无奖品，请添加'))
-              : ListView.builder(
-                  itemCount: _prizes.length,
-                  itemBuilder: (context, index) {
-                    final prize = _prizes[index];
-                    return ListTile(
-                      title: Text('${prize.name} (${prize.quantity}个)'),
-                      subtitle: prize.description.isNotEmpty ? Text(prize.description) : null,
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete),
-                        onPressed: _raffleResult == null ? () => _removePrize(prize.id) : null,
-                      ),
-                    );
-                  },
-                ),
+                ? const Center(child: Text('暂无奖品，请添加'))
+                : ListView.builder(
+                    itemCount: _prizes.length,
+                    itemBuilder: (context, index) {
+                      final prize = _prizes[index];
+                      return ListTile(
+                        title: Text('${prize.name} (${prize.quantity}个)'),
+                        subtitle: prize.description.isNotEmpty
+                            ? Text(prize.description)
+                            : null,
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete),
+                          onPressed: _raffleResult == null
+                              ? () => _removePrize(prize.id)
+                              : null,
+                        ),
+                      );
+                    },
+                  ),
           ),
-          
+
           // 参与者列表
           const SizedBox(height: 8),
-          const Text('参与者列表:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('参与者列表:',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           Expanded(
             flex: 3,
-            child: _users.isEmpty 
-              ? const Center(child: Text('等待参与者加入...'))
-              : ListView.builder(
-                  itemCount: _users.length,
-                  itemBuilder: (context, index) {
-                    final user = _users[index];
-                    String? prizeInfo;
+            child: _users.isEmpty
+                ? const Center(child: Text('等待参与者加入...'))
+                : ListView.builder(
+                    itemCount: _users.length,
+                    itemBuilder: (context, index) {
+                      final user = _users[index];
+                      String? prizeInfo;
                       if (_raffleResult != null) {
-                      final prizeId = _raffleResult!.userPrizePairs[user.uuid];
-                      final prize = _prizes.firstWhere(
-                        (p) => p.id == prizeId, 
-                        orElse: () => Prize(id: '', name: '')
+                        final prizeId =
+                            _raffleResult!.userPrizePairs[user.uuid];
+                        final prize = _prizes.firstWhere((p) => p.id == prizeId,
+                            orElse: () => Prize(id: '', name: ''));
+                        prizeInfo =
+                            prize.name.isNotEmpty ? '中奖: ${prize.name}' : '未中奖';
+                      }
+
+                      return ListTile(
+                        leading: Icon(
+                          user.confirmed
+                              ? Icons.check_circle
+                              : Icons.hourglass_empty,
+                          color: user.confirmed ? Colors.green : Colors.amber,
+                        ),
+                        title: Text(user.name),
+                        subtitle: prizeInfo != null ? Text(prizeInfo) : null,
                       );
-                      prizeInfo = prize.name.isNotEmpty ? '中奖: ${prize.name}' : '未中奖';
-                    }
-                    
-                    return ListTile(
-                      leading: Icon(
-                        user.confirmed ? Icons.check_circle : Icons.hourglass_empty,
-                        color: user.confirmed ? Colors.green : Colors.amber,
-                      ),
-                      title: Text(user.name),
-                      subtitle: prizeInfo != null ? Text(prizeInfo) : null,
-                    );
-                  },
-                ),
+                    },
+                  ),
           ),
-            // 操作按钮
+          // 操作按钮
           Center(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 16.0),
@@ -463,17 +470,19 @@ class _HostPageState extends State<HostPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   ElevatedButton(
-                    onPressed: _raffleResult == null && !_isRaffling ? _startRaffle : null,
+                    onPressed: _raffleResult == null && !_isRaffling
+                        ? _startRaffle
+                        : null,
                     style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 32, vertical: 16),
                     ),
                     child: _isRaffling
-                      ? const SizedBox(
-                          width: 20, 
-                          height: 20, 
-                          child: CircularProgressIndicator(strokeWidth: 2)
-                        )
-                      : Text(_raffleResult == null ? '开始抽奖' : '抽奖已完成'),
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : Text(_raffleResult == null ? '开始抽奖' : '抽奖已完成'),
                   ),
                   if (_raffleResult != null)
                     Padding(
@@ -481,10 +490,12 @@ class _HostPageState extends State<HostPage> {
                       child: ElevatedButton(
                         onPressed: _showAllRaffleResults,
                         style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 32, vertical: 16),
                           backgroundColor: Colors.blue,
                         ),
-                        child: const Text('查看完整抽奖结果', style: TextStyle(color: Colors.white)),
+                        child: const Text('查看完整抽奖结果',
+                            style: TextStyle(color: Colors.white)),
                       ),
                     ),
                 ],
@@ -495,7 +506,7 @@ class _HostPageState extends State<HostPage> {
       ),
     );
   }
-  
+
   // 设置视图（添加奖品、设置端口等）
   Widget _buildSetupView() {
     return Padding(
@@ -510,16 +521,18 @@ class _HostPageState extends State<HostPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('选择房间端口:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text('选择房间端口:',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   DropdownButton<int>(
                     value: _selectedPort,
-                    items: _availablePorts.map((port) => 
-                      DropdownMenuItem(
-                        value: port,
-                        child: Text('端口 $port'),
-                      )
-                    ).toList(),
+                    items: _availablePorts
+                        .map((port) => DropdownMenuItem(
+                              value: port,
+                              child: Text('端口 $port'),
+                            ))
+                        .toList(),
                     onChanged: (value) {
                       setState(() {
                         _selectedPort = value!;
@@ -531,9 +544,10 @@ class _HostPageState extends State<HostPage> {
             ),
           ),
           const SizedBox(height: 16),
-          
+
           // 添加奖品
-          const Text('添加奖品:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('添加奖品:',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           TextField(
             controller: _nameController,
@@ -573,28 +587,31 @@ class _HostPageState extends State<HostPage> {
             ],
           ),
           const SizedBox(height: 16),
-          
+
           // 奖品列表
-          const Text('已添加的奖品:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('已添加的奖品:',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           Expanded(
             child: _prizes.isEmpty
-              ? const Center(child: Text('暂无奖品，请添加'))
-              : ListView.builder(
-                  itemCount: _prizes.length,
-                  itemBuilder: (context, index) {
-                    final prize = _prizes[index];
-                    return ListTile(
-                      title: Text('${prize.name} (${prize.quantity}个)'),
-                      subtitle: prize.description.isNotEmpty ? Text(prize.description) : null,
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete),
-                        onPressed: () => _removePrize(prize.id),
-                      ),
-                    );
-                  },
-                ),
+                ? const Center(child: Text('暂无奖品，请添加'))
+                : ListView.builder(
+                    itemCount: _prizes.length,
+                    itemBuilder: (context, index) {
+                      final prize = _prizes[index];
+                      return ListTile(
+                        title: Text('${prize.name} (${prize.quantity}个)'),
+                        subtitle: prize.description.isNotEmpty
+                            ? Text(prize.description)
+                            : null,
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete),
+                          onPressed: () => _removePrize(prize.id),
+                        ),
+                      );
+                    },
+                  ),
           ),
-            // 添加"将自己加入抽奖"的选项
+          // 添加"将自己加入抽奖"的选项
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8.0),
             child: Row(
@@ -611,7 +628,7 @@ class _HostPageState extends State<HostPage> {
               ],
             ),
           ),
-          
+
           // 启动服务器按钮
           Center(
             child: Padding(
@@ -619,10 +636,12 @@ class _HostPageState extends State<HostPage> {
               child: ElevatedButton(
                 onPressed: _prizes.isNotEmpty ? _startServer : null,
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
                   backgroundColor: Colors.green,
                 ),
-                child: const Text('开始抽奖', style: TextStyle(color: Colors.white)),
+                child:
+                    const Text('开始抽奖', style: TextStyle(color: Colors.white)),
               ),
             ),
           ),
