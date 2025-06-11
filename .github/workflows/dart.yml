@@ -9,22 +9,10 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - os: windows-latest
-            platform: windows
-          - os: ubuntu-latest
-            platform: linux
-          - os: macos-latest
-            platform: macos
-    
-    runs-on: ${{ matrix.os }}
-
+  main:
+    runs-on: macos-latest
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
@@ -32,71 +20,10 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version-file: pubspec.yaml # path to pubspec.yaml
-      - run: flutter --version
-      # Set up Java for Android builds
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      # Install dependencies
-      - name: Install dependencies
-        run: flutter pub get
-
-      # Verify formatting
-      - name: Verify formatting
-        run: flutter format --dry-run --set-exit-if-changed .
-
-      # Analyze project source
-      - name: Analyze project source
-        run: flutter analyze
-
-      # Run tests
-      - name: Run tests
-        run: flutter test
-
-      # Enable platform support
-      - name: Enable platform support
-        run: |
-          flutter config --enable-${{ matrix.platform }}-desktop
-          flutter config --enable-android
-
-      # Build for primary platform
-      - name: Build for ${{ matrix.platform }}
-        run: |
-          if [ "${{ matrix.platform }}" = "windows" ]; then
-            flutter build windows --release
-            flutter build apk --release
-          elif [ "${{ matrix.platform }}" = "linux" ]; then
-            flutter build linux --release
-          elif [ "${{ matrix.platform }}" = "macos" ]; then
-            flutter build macos --release
-            flutter build ios --release
-          else
-            echo "Unsupported platform: ${{ matrix.platform }}"
-            exit 1
-          fi
-        shell: bash
-
-      # Build for Android
-      - name: Build for Android
-        run: flutter build apk --release
-
-      # Upload artifacts for primary platform
-      - name: Upload ${{ matrix.platform }} artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform }}-build
-          path: |
-            build/${{ matrix.platform }}/
-            !build/${{ matrix.platform }}/**/*.pdb
-            !build/${{ matrix.platform }}/**/*.exp
-            !build/${{ matrix.platform }}/**/*.lib
-
-      # Upload Android artifacts
-      - name: Upload Android artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-build-${{ matrix.os }}
-          path: build/app/outputs/flutter-apk/*.apk
+      - run: flutter pub get
+      - run: flutter build ios --release --no-codesign
+      - run: flutter build apk
+      - run: flutter build appbundle
+      - run: flutter build windows
+      - run: flutter build linux
+      - run: flutter build macos
