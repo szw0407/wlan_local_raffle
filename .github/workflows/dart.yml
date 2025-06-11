@@ -18,13 +18,10 @@ jobs:
         include:
           - os: windows-latest
             platform: windows
-            additional_platform: android
           - os: ubuntu-latest
             platform: linux
-            additional_platform: android
           - os: macos-latest
             platform: macos
-            additional_platform: android
     
     runs-on: ${{ matrix.os }}
 
@@ -70,10 +67,15 @@ jobs:
         run: |
           if [ "${{ matrix.platform }}" = "windows" ]; then
             flutter build windows --release
+            flutter build apk --release
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             flutter build linux --release
           elif [ "${{ matrix.platform }}" = "macos" ]; then
             flutter build macos --release
+            flutter build ios --release
+          else
+            echo "Unsupported platform: ${{ matrix.platform }}"
+            exit 1
           fi
         shell: bash
 
