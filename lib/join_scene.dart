@@ -30,6 +30,7 @@ class _JoinPageState extends State<JoinPage> {
   List<Prize> _prizes = [];
   bool _isConnected = false;
   bool _isConfirmed = false;
+  bool _isRaffleFinished = false; // 添加抽奖是否结束的状态
   String? _myPrizeResult;
 
   late User _user;
@@ -121,6 +122,7 @@ class _JoinPageState extends State<JoinPage> {
     setState(() {
       _isConnected = false;
       _isConfirmed = false;
+      _isRaffleFinished = false;
       _connectionState = ConnectionState.none;
       _hostName = null;
       _prizes = [];
@@ -157,7 +159,14 @@ class _JoinPageState extends State<JoinPage> {
           _handleHostBroadcast(message);
           break;
         case MessageType.raffleResults:
-          if (_isConfirmed) {_handleRaffleResults(message);}
+          if (_isConfirmed) {
+            _handleRaffleResults(message);
+          } else {
+            // 未确认用户收到抽奖结果，标记抽奖已结束
+            setState(() {
+              _isRaffleFinished = true;
+            });
+          }
           break;
         default:
           // 忽略其他类型的消息
@@ -284,7 +293,7 @@ class _JoinPageState extends State<JoinPage> {
         ),
       ),
       const SizedBox(height: 16),
-        if (!_isConfirmed)
+        if (!_isConfirmed && !_isRaffleFinished)
         Expanded(
           child: Padding(
             padding: const EdgeInsets.all(8.0),
@@ -318,6 +327,53 @@ class _JoinPageState extends State<JoinPage> {
                 ),
               ],
             ),
+          ),
+        )
+      else if (!_isConfirmed && _isRaffleFinished)
+        Expanded(
+          child: Stack(
+            children: [
+              // 背景大叉
+              Center(
+                child: Icon(
+                  Icons.close,
+                  size: 200,
+                  color: Colors.red.withOpacity(0.1),
+                ),
+              ),
+              // 前景内容
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.error_outline, size: 80, color: Colors.red),
+                    const SizedBox(height: 16),
+                    const Text(
+                      '抽奖已结束',
+                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.red),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '您未能及时确认参与',
+                      style: TextStyle(fontSize: 16, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton(
+                      onPressed: null, // 禁用按钮
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                        backgroundColor: Colors.grey,
+                        disabledBackgroundColor: Colors.grey,
+                      ),
+                      child: const Text(
+                        '确认参与抽奖',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         )
       else
