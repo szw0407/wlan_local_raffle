@@ -77,10 +77,8 @@ class _HostPageState extends State<HostPage> {
       _udpService.onData.listen(_handleIncomingMessage);
       if (_includeHostInRaffle) {
         _users.add(User(uuid: _userUuid, name: _hostName));
+        _users.firstWhere((user) => user.uuid == _userUuid).confirmed = true;
       }
-      // 自动让房主确认加入
-      final hostUser = _users.firstWhere((user) => user.uuid == _userUuid);
-      hostUser.confirmed = true;
 
       setState(() {
         _isServerRunning = true;
