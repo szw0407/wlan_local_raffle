@@ -438,7 +438,8 @@ class _HostPageState extends State<HostPage> {
                     itemBuilder: (context, index) {
                       final user = _users[index];
                       String? prizeInfo;
-                      if (_raffleResult != null) {
+                      // 只有确认的用户才显示中奖情况
+                      if (_raffleResult != null && user.confirmed) {
                         final prizeId =
                             _raffleResult!.userPrizePairs[user.uuid];
                         final prize = _prizes.firstWhere((p) => p.id == prizeId,
