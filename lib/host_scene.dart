@@ -452,8 +452,10 @@ class _HostPageState extends State<HostPage> {
                         leading: Icon(
                           user.confirmed
                               ? Icons.check_circle
-                              : Icons.hourglass_empty,
-                          color: user.confirmed ? Colors.green : Colors.amber,
+                              : (_raffleResult != null ? Icons.error : Icons.hourglass_empty),
+                          color: user.confirmed 
+                              ? Colors.green 
+                              : (_raffleResult != null ? Colors.red : Colors.amber),
                         ),
                         title: Text(user.name),
                         subtitle: prizeInfo != null ? Text(prizeInfo) : null,
