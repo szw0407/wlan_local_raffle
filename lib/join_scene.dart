@@ -157,7 +157,7 @@ class _JoinPageState extends State<JoinPage> {
           _handleHostBroadcast(message);
           break;
         case MessageType.raffleResults:
-          _handleRaffleResults(message);
+          if (_isConfirmed) {_handleRaffleResults(message);}
           break;
         default:
           // 忽略其他类型的消息
@@ -189,10 +189,6 @@ class _JoinPageState extends State<JoinPage> {
   }
     // 处理抽奖结果
   void _handleRaffleResults(Map<String, dynamic> message) {
-    // 只有已确认参与的用户才能收到抽奖结果
-    if (!_isConfirmed) {
-      return;
-    }
     
     final result = RaffleResult.fromJson(message['result']);
     final myPrizeId = result.userPrizePairs[_userUuid];
