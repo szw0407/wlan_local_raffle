@@ -189,6 +189,11 @@ class _JoinPageState extends State<JoinPage> {
   }
     // 处理抽奖结果
   void _handleRaffleResults(Map<String, dynamic> message) {
+    // 只有已确认参与的用户才能收到抽奖结果
+    if (!_isConfirmed) {
+      return;
+    }
+    
     final result = RaffleResult.fromJson(message['result']);
     final myPrizeId = result.userPrizePairs[_userUuid];
     
