@@ -127,18 +127,15 @@ jobs:
       - name: Upload Web artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: build/web
           name: github-pages
+          path: build/web
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build-web
+    steps:
       - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
-        with:
-          branch: gh-pages  # Ensure this branch exists or is created
-          folder: build/web
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: 'Deploy web build to GitHub Pages'
-          target-branch: gh-pages
-          force: true
-          allow-empty-commit: true
-          skip-checks: true
-          skip-commit: false
-          skip-pull-request: false
