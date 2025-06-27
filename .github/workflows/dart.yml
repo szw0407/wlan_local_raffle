@@ -131,3 +131,14 @@ jobs:
           name: github-pages
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
+        with:
+          branch: gh-pages  # Ensure this branch exists or is created
+          folder: build/web
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'Deploy web build to GitHub Pages'
+          target-branch: gh-pages
+          force: true
+          allow-empty-commit: true
+          skip-checks: true
+          skip-commit: false
+          skip-pull-request: false
